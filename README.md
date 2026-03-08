@@ -282,12 +282,3 @@ Then go to GitHub, find the tag under **Releases**, and **publish** it. Publishi
 make docker        # build multi-platform image locally (requires docker buildx)
 make docker-push   # build and push to ghcr.io
 ```
-
-### Setting up Codecov (coverage badge)
-
-1. Sign in at [codecov.io](https://codecov.io) with your GitHub account and add this repo
-2. Copy the upload token from the Codecov dashboard
-3. In the GitHub repo: **Settings** → **Secrets and variables** → **Actions** → **New repository secret**
-4. Name: `CODECOV_TOKEN`, Value: *(paste token)*
-
-The coverage badge will start showing real data on the next push.
