@@ -248,6 +248,21 @@ Supported platforms: `linux/amd64`, `linux/arm64` (Raspberry Pi 4+).
 
 ## Development
 
+### Local development with .env
+
+Copy `.env.example` to `.env` and fill in your values. The binary loads `.env`
+automatically on startup when the file is present, so you can iterate without
+setting environment variables by hand each time.
+
+```bash
+cp .env.example .env
+$EDITOR .env
+make build
+./nomad-botherer
+```
+
+`.env` is listed in `.gitignore` and will never be committed.
+
 ### Build and test
 
 ```bash
@@ -257,6 +272,30 @@ make test-cover   # run tests and open an HTML coverage report
 make lint         # go vet ./...
 make clean        # remove build artefacts
 ```
+
+### Simulating a webhook
+
+`scripts/send-webhook.sh` constructs a minimal GitHub push event payload and
+POSTs it to a locally running instance. It reads defaults from `.env` (URL,
+branch, secret) and accepts flags to override any of them.
+
+```bash
+# Push to whatever branch GIT_BRANCH is set to in .env (default: main)
+scripts/send-webhook.sh
+
+# Override branch and commit SHA
+scripts/send-webhook.sh -b develop -c abc1234def5678
+
+# Target a different host or port
+scripts/send-webhook.sh -u http://nomad-botherer.internal/webhook
+
+# See all options
+scripts/send-webhook.sh -h
+```
+
+If `WEBHOOK_SECRET` is set in `.env`, the script signs the request with an
+HMAC-SHA256 signature (using `openssl`). If no secret is set, the request is
+sent unsigned.
 
 ### Release process
 

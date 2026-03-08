@@ -8,6 +8,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/joho/godotenv"
+
 	"github.com/gerrowadat/nomad-botherer/internal/config"
 	"github.com/gerrowadat/nomad-botherer/internal/gitwatch"
 	"github.com/gerrowadat/nomad-botherer/internal/nomad"
@@ -22,6 +24,11 @@ var (
 )
 
 func main() {
+	// Load .env for local development. Non-fatal if the file is absent.
+	if err := godotenv.Load(); err != nil && !os.IsNotExist(err) {
+		slog.Warn("Error loading .env file", "err", err)
+	}
+
 	cfg, err := config.Load()
 	if err != nil {
 		slog.Error("Loading config", "err", err)
