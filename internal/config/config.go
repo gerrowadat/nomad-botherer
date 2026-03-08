@@ -34,30 +34,39 @@ type Config struct {
 	LogLevel string
 }
 
+// Load parses flags from os.Args and falls back to environment variables.
 func Load() (*Config, error) {
+	return LoadFromArgs(flag.CommandLine, os.Args[1:])
+}
+
+// LoadFromArgs registers flags on fs and parses args.
+// Tests pass a fresh flag.NewFlagSet to avoid touching flag.CommandLine.
+func LoadFromArgs(fs *flag.FlagSet, args []string) (*Config, error) {
 	c := &Config{}
 
-	flag.StringVar(&c.RepoURL, "repo-url", envOrDefault("GIT_REPO_URL", ""), "Remote git repo URL (required)")
-	flag.StringVar(&c.Branch, "branch", envOrDefault("GIT_BRANCH", "main"), "Branch to watch")
-	flag.DurationVar(&c.PollInterval, "poll-interval", envDurationOrDefault("POLL_INTERVAL", 5*time.Minute), "Git poll interval (e.g. 5m, 30s)")
-	flag.StringVar(&c.HCLDir, "hcl-dir", envOrDefault("HCL_DIR", ""), "Directory within repo containing HCL job files (empty = repo root)")
-	flag.StringVar(&c.GitToken, "git-token", envOrDefault("GIT_TOKEN", ""), "Git HTTP token for private repos (e.g. GitHub PAT)")
-	flag.StringVar(&c.GitSSHKeyPath, "git-ssh-key", envOrDefault("GIT_SSH_KEY", ""), "Path to SSH private key for git auth")
-	flag.StringVar(&c.GitSSHKeyPass, "git-ssh-key-password", envOrDefault("GIT_SSH_KEY_PASSWORD", ""), "SSH private key passphrase")
+	fs.StringVar(&c.RepoURL, "repo-url", envOrDefault("GIT_REPO_URL", ""), "Remote git repo URL (required)")
+	fs.StringVar(&c.Branch, "branch", envOrDefault("GIT_BRANCH", "main"), "Branch to watch")
+	fs.DurationVar(&c.PollInterval, "poll-interval", envDurationOrDefault("POLL_INTERVAL", 5*time.Minute), "Git poll interval (e.g. 5m, 30s)")
+	fs.StringVar(&c.HCLDir, "hcl-dir", envOrDefault("HCL_DIR", ""), "Directory within repo containing HCL job files (empty = repo root)")
+	fs.StringVar(&c.GitToken, "git-token", envOrDefault("GIT_TOKEN", ""), "Git HTTP token for private repos (e.g. GitHub PAT)")
+	fs.StringVar(&c.GitSSHKeyPath, "git-ssh-key", envOrDefault("GIT_SSH_KEY", ""), "Path to SSH private key for git auth")
+	fs.StringVar(&c.GitSSHKeyPass, "git-ssh-key-password", envOrDefault("GIT_SSH_KEY_PASSWORD", ""), "SSH private key passphrase")
 
-	flag.StringVar(&c.NomadAddr, "nomad-addr", envOrDefault("NOMAD_ADDR", "http://127.0.0.1:4646"), "Nomad API address")
-	flag.StringVar(&c.NomadToken, "nomad-token", envOrDefault("NOMAD_TOKEN", ""), "Nomad ACL token")
-	flag.StringVar(&c.NomadNamespace, "nomad-namespace", envOrDefault("NOMAD_NAMESPACE", "default"), "Nomad namespace")
+	fs.StringVar(&c.NomadAddr, "nomad-addr", envOrDefault("NOMAD_ADDR", "http://127.0.0.1:4646"), "Nomad API address")
+	fs.StringVar(&c.NomadToken, "nomad-token", envOrDefault("NOMAD_TOKEN", ""), "Nomad ACL token")
+	fs.StringVar(&c.NomadNamespace, "nomad-namespace", envOrDefault("NOMAD_NAMESPACE", "default"), "Nomad namespace")
 
-	flag.StringVar(&c.ListenAddr, "listen-addr", envOrDefault("LISTEN_ADDR", ":8080"), "HTTP listen address")
-	flag.StringVar(&c.WebhookSecret, "webhook-secret", envOrDefault("WEBHOOK_SECRET", ""), "GitHub webhook secret for verifying payloads")
-	flag.StringVar(&c.WebhookPath, "webhook-path", envOrDefault("WEBHOOK_PATH", "/webhook"), "HTTP path for webhook endpoint")
+	fs.StringVar(&c.ListenAddr, "listen-addr", envOrDefault("LISTEN_ADDR", ":8080"), "HTTP listen address")
+	fs.StringVar(&c.WebhookSecret, "webhook-secret", envOrDefault("WEBHOOK_SECRET", ""), "GitHub webhook HMAC secret")
+	fs.StringVar(&c.WebhookPath, "webhook-path", envOrDefault("WEBHOOK_PATH", "/webhook"), "HTTP path for webhook endpoint")
 
-	flag.DurationVar(&c.DiffInterval, "diff-interval", envDurationOrDefault("DIFF_INTERVAL", time.Minute), "How often to run a diff check regardless of git changes")
+	fs.DurationVar(&c.DiffInterval, "diff-interval", envDurationOrDefault("DIFF_INTERVAL", time.Minute), "How often to run a diff check regardless of git changes")
 
-	flag.StringVar(&c.LogLevel, "log-level", envOrDefault("LOG_LEVEL", "info"), "Log level: debug, info, warn, error")
+	fs.StringVar(&c.LogLevel, "log-level", envOrDefault("LOG_LEVEL", "info"), "Log level: debug, info, warn, error")
 
-	flag.Parse()
+	if err := fs.Parse(args); err != nil {
+		return nil, fmt.Errorf("parsing flags: %w", err)
+	}
 
 	if c.RepoURL == "" {
 		return nil, fmt.Errorf("--repo-url / GIT_REPO_URL is required")
