@@ -5,14 +5,21 @@ package nomad
 import (
 	"fmt"
 	"log/slog"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
 
 	nomadapi "github.com/hashicorp/nomad/api"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 
 	"github.com/gerrowadat/nomad-botherer/internal/config"
 )
+
+// jobBlockRe matches a top-level Nomad job stanza in HCL.
+// Files without this pattern are silently skipped (e.g. ACL policies, volumes, namespaces).
+var jobBlockRe = regexp.MustCompile(`(?m)^\s*job\s+"`)
 
 // DiffType describes the relationship between a job in HCL and in Nomad.
 type DiffType string
@@ -37,6 +44,10 @@ type JobDiff struct {
 	HCLFile  string   `json:"hcl_file,omitempty"` // empty for MissingFromHCL
 	DiffType DiffType `json:"diff_type"`
 	Detail   string   `json:"detail"`
+
+	// PlanDiff holds the structured diff from the Nomad plan API.
+	// Only populated for DiffTypeModified entries.
+	PlanDiff *nomadapi.JobDiff `json:"-"`
 }
 
 // NomadJobsClient is the subset of the Nomad API jobs client we use.
@@ -57,6 +68,26 @@ type Differ struct {
 	diffs      []JobDiff
 	lastCheck  time.Time
 	lastCommit string
+
+	hclParseErrors  prometheus.Counter
+	hclFilesSkipped prometheus.Counter
+}
+
+// newDifferBase constructs a Differ with metrics registered into reg.
+func newDifferBase(jobs NomadJobsClient, namespace string, reg prometheus.Registerer) *Differ {
+	f := promauto.With(reg)
+	return &Differ{
+		jobs:      jobs,
+		namespace: namespace,
+		hclParseErrors: f.NewCounter(prometheus.CounterOpts{
+			Name: "nomad_botherer_hcl_parse_errors_total",
+			Help: "Total number of HCL files that failed to parse as Nomad job definitions.",
+		}),
+		hclFilesSkipped: f.NewCounter(prometheus.CounterOpts{
+			Name: "nomad_botherer_hcl_non_job_files_skipped_total",
+			Help: "Total number of HCL files skipped because they lack a top-level job stanza (e.g. ACL policies, volumes).",
+		}),
+	}
 }
 
 // NewDiffer creates a Differ backed by a real Nomad API client.
@@ -72,18 +103,12 @@ func NewDiffer(cfg *config.Config) (*Differ, error) {
 		return nil, fmt.Errorf("creating nomad client: %w", err)
 	}
 
-	return &Differ{
-		jobs:      client.Jobs(),
-		namespace: cfg.NomadNamespace,
-	}, nil
+	return newDifferBase(client.Jobs(), cfg.NomadNamespace, prometheus.DefaultRegisterer), nil
 }
 
 // NewWithClient creates a Differ with a custom jobs client, intended for tests.
 func NewWithClient(cfg *config.Config, jobs NomadJobsClient) *Differ {
-	return &Differ{
-		jobs:      jobs,
-		namespace: cfg.NomadNamespace,
-	}
+	return newDifferBase(jobs, cfg.NomadNamespace, prometheus.NewRegistry())
 }
 
 // Check compares the given HCL files (path → content) against the live Nomad
@@ -99,9 +124,16 @@ func (d *Differ) Check(hclFiles map[string]string, commit string) error {
 	hclJobFile := make(map[string]string)      // jobID → source HCL file path
 
 	for filename, content := range hclFiles {
+		if !jobBlockRe.MatchString(content) {
+			slog.Debug("Skipping HCL file with no job stanza", "file", filename)
+			d.hclFilesSkipped.Inc()
+			continue
+		}
+
 		job, err := d.jobs.ParseHCL(content, true)
 		if err != nil {
 			slog.Warn("Failed to parse HCL file, skipping", "file", filename, "err", err)
+			d.hclParseErrors.Inc()
 			continue
 		}
 		if job == nil || job.ID == nil || *job.ID == "" {
@@ -148,6 +180,7 @@ func (d *Differ) Check(hclFiles map[string]string, commit string) error {
 				HCLFile:  filename,
 				DiffType: DiffTypeModified,
 				Detail:   fmt.Sprintf("Nomad plan shows diff type %q", plan.Diff.Type),
+				PlanDiff: plan.Diff,
 			})
 		}
 	}
