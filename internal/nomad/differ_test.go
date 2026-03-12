@@ -2,6 +2,7 @@ package nomad_test
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	nomadapi "github.com/hashicorp/nomad/api"
@@ -149,14 +150,54 @@ func TestDiffer_HCLParseError_Skipped(t *testing.T) {
 	}
 	d := newTestDiffer(mock)
 
-	// A parse failure should be logged and skipped, not returned as an error.
-	if err := d.Check(map[string]string{"bad.hcl": "not valid hcl !!!"}, "abc123"); err != nil {
+	// Content has a job stanza but the (mock) parser rejects it — should log,
+	// increment the error counter, and move on without returning an error.
+	if err := d.Check(map[string]string{`bad.hcl`: `job "broken" { INVALID }`}, "abc123"); err != nil {
 		t.Fatalf("Check should not fail on parse errors: %v", err)
 	}
 
 	diffs, _, _ := d.Diffs()
 	if len(diffs) != 0 {
 		t.Errorf("expected 0 diffs after parse error, got %d", len(diffs))
+	}
+}
+
+func TestDiffer_NonJobHCL_Skipped(t *testing.T) {
+	mock := defaultMock()
+	parseCalled := false
+	mock.parseHCLFn = func(jobHCL string, normalize bool) (*nomadapi.Job, error) {
+		parseCalled = true
+		return nil, fmt.Errorf("should not be called")
+	}
+	d := newTestDiffer(mock)
+
+	aclPolicy := `
+name        = "my-policy"
+description = "ACL policy for readers"
+rules       = <<EOT
+namespace "default" {
+  policy = "read"
+}
+EOT`
+	volume := `
+id        = "database"
+name      = "database"
+type      = "csi"
+plugin_id = "aws-ebs"
+`
+	if err := d.Check(map[string]string{
+		"policies/readers.hcl": aclPolicy,
+		"volumes/db.hcl":       volume,
+	}, "abc123"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if parseCalled {
+		t.Error("ParseHCL should not be called for non-job HCL files")
+	}
+	diffs, _, _ := d.Diffs()
+	if len(diffs) != 0 {
+		t.Errorf("expected 0 diffs for non-job files, got %d", len(diffs))
 	}
 }
 
@@ -167,7 +208,7 @@ func TestDiffer_MultipleDiffTypes(t *testing.T) {
 	// job-b: missing from Nomad
 	// job-c: running in Nomad but not in HCL
 	mock.parseHCLFn = func(jobHCL string, normalize bool) (*nomadapi.Job, error) {
-		if jobHCL == "job-a" {
+		if strings.Contains(jobHCL, "job-a") {
 			return &nomadapi.Job{ID: strPtr("job-a")}, nil
 		}
 		return &nomadapi.Job{ID: strPtr("job-b")}, nil
@@ -190,7 +231,7 @@ func TestDiffer_MultipleDiffTypes(t *testing.T) {
 	}
 
 	d := newTestDiffer(mock)
-	if err := d.Check(map[string]string{"a.hcl": "job-a", "b.hcl": "job-b"}, "xyz"); err != nil {
+	if err := d.Check(map[string]string{`a.hcl`: `job "job-a" {}`, `b.hcl`: `job "job-b" {}`}, "xyz"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
