@@ -44,6 +44,10 @@ type JobDiff struct {
 	HCLFile  string   `json:"hcl_file,omitempty"` // empty for MissingFromHCL
 	DiffType DiffType `json:"diff_type"`
 	Detail   string   `json:"detail"`
+
+	// PlanDiff holds the structured diff from the Nomad plan API.
+	// Only populated for DiffTypeModified entries.
+	PlanDiff *nomadapi.JobDiff `json:"-"`
 }
 
 // NomadJobsClient is the subset of the Nomad API jobs client we use.
@@ -176,6 +180,7 @@ func (d *Differ) Check(hclFiles map[string]string, commit string) error {
 				HCLFile:  filename,
 				DiffType: DiffTypeModified,
 				Detail:   fmt.Sprintf("Nomad plan shows diff type %q", plan.Diff.Type),
+				PlanDiff: plan.Diff,
 			})
 		}
 	}

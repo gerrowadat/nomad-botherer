@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"html/template"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -33,14 +34,15 @@ type GitStatusSource interface {
 
 // Server holds the HTTP mux and all dependencies.
 type Server struct {
-	cfg    *config.Config
-	diffs  DiffSource
-	git    GitStatusSource
-	mux    *http.ServeMux
+	cfg     *config.Config
+	diffs   DiffSource
+	git     GitStatusSource
+	version string
+	mux     *http.ServeMux
 
 	// Prometheus metrics
-	jobDiffsGauge     *prometheus.GaugeVec
-	lastCheckGauge    prometheus.Gauge
+	jobDiffsGauge      *prometheus.GaugeVec
+	lastCheckGauge     prometheus.Gauge
 	gitLastUpdateGauge prometheus.Gauge
 }
 
@@ -53,9 +55,10 @@ func New(cfg *config.Config, diffs DiffSource, git GitStatusSource, version stri
 // Useful in tests to avoid duplicate-registration panics when creating multiple servers.
 func NewWithRegistry(cfg *config.Config, diffs DiffSource, git GitStatusSource, version string, reg prometheus.Registerer) *Server {
 	s := &Server{
-		cfg:   cfg,
-		diffs: diffs,
-		git:   git,
+		cfg:     cfg,
+		diffs:   diffs,
+		git:     git,
+		version: version,
 
 		jobDiffsGauge: promauto.With(reg).NewGaugeVec(prometheus.GaugeOpts{
 			Name: "nomad_botherer_job_diffs",
@@ -89,7 +92,9 @@ func NewWithRegistry(cfg *config.Config, diffs DiffSource, git GitStatusSource, 
 	}
 
 	s.mux = http.NewServeMux()
+	s.mux.HandleFunc("/{$}", s.handleIndex)
 	s.mux.HandleFunc("/healthz", s.handleHealthz)
+	s.mux.HandleFunc("/diffs", s.handleDiffs)
 	s.mux.Handle("/metrics", metricsHandler)
 	s.mux.HandleFunc(cfg.WebhookPath, s.handleWebhook())
 
@@ -121,6 +126,68 @@ func (s *Server) Run(ctx context.Context) error {
 // real listener.
 func (s *Server) Handler() http.Handler {
 	return s.mux
+}
+
+var indexTmpl = template.Must(template.New("index").Parse(`<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>nomad-botherer</title>
+  <style>
+    body { font-family: sans-serif; max-width: 640px; margin: 2em auto; color: #222; }
+    h1   { margin-bottom: 0.2em; }
+    .ok  { color: #2a7a2a; font-weight: bold; }
+    .bad { color: #b94040; font-weight: bold; }
+    code { background: #f4f4f4; padding: 0.1em 0.3em; border-radius: 3px; }
+    ul   { line-height: 1.8; }
+  </style>
+</head>
+<body>
+  <h1>nomad-botherer <small>{{.Version}}</small></h1>
+  <p>Status:
+    {{- if .DiffCount}}
+    <span class="bad">{{.DiffCount}} difference(s) detected</span>
+    {{- else}}
+    <span class="ok">OK — no differences</span>
+    {{- end}}
+  </p>
+  {{- if .LastCheck}}
+  <p>Last check: {{.LastCheck}}{{if .Commit}} (commit <code>{{.Commit}}</code>){{end}}</p>
+  {{- end}}
+  <ul>
+    <li><a href="/diffs">/diffs</a> — current job diffs (plan-style)</li>
+    <li><a href="/healthz">/healthz</a> — JSON health check</li>
+    <li><a href="/metrics">/metrics</a> — Prometheus metrics</li>
+  </ul>
+</body>
+</html>
+`))
+
+func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
+	diffs, lastCheck, commit := s.diffs.Diffs()
+
+	data := struct {
+		Version   string
+		DiffCount int
+		LastCheck string
+		Commit    string
+	}{
+		Version:   s.version,
+		DiffCount: len(diffs),
+		Commit:    commit,
+	}
+	if !lastCheck.IsZero() {
+		data.LastCheck = lastCheck.Format(time.RFC3339)
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_ = indexTmpl.Execute(w, data)
+}
+
+func (s *Server) handleDiffs(w http.ResponseWriter, r *http.Request) {
+	diffs, lastCheck, commit := s.diffs.Diffs()
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	fmt.Fprint(w, renderDiffsText(diffs, lastCheck, commit))
 }
 
 // HealthResponse is the JSON body returned by /healthz.

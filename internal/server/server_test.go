@@ -8,9 +8,11 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
+	nomadapi "github.com/hashicorp/nomad/api"
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/gerrowadat/nomad-botherer/internal/config"
@@ -94,6 +96,151 @@ func githubPingRequest(t *testing.T) *http.Request {
 	req.Header.Set("X-GitHub-Event", "ping")
 	req.Header.Set("X-GitHub-Delivery", "test-ping-id")
 	return req
+}
+
+// ── / (index) ─────────────────────────────────────────────────────────────────
+
+func TestIndex_NoDiffs(t *testing.T) {
+	srv, _ := newTestServer(t, nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
+		t.Errorf("expected text/html content-type, got %q", ct)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "/diffs") {
+		t.Error("index page should link to /diffs")
+	}
+	if !strings.Contains(body, "/healthz") {
+		t.Error("index page should link to /healthz")
+	}
+	if !strings.Contains(body, "no differences") {
+		t.Error("index page should indicate no differences when there are none")
+	}
+}
+
+func TestIndex_WithDiffs(t *testing.T) {
+	diffs := []nomad.JobDiff{
+		{JobID: "api", DiffType: nomad.DiffTypeModified, Detail: "Edited"},
+	}
+	srv, _ := newTestServer(t, diffs)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "1 difference") {
+		t.Error("index page should report the diff count")
+	}
+}
+
+// ── /diffs ────────────────────────────────────────────────────────────────────
+
+func TestDiffs_NoDiffs(t *testing.T) {
+	srv, _ := newTestServer(t, nil)
+	req := httptest.NewRequest(http.MethodGet, "/diffs", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/plain") {
+		t.Errorf("expected text/plain content-type, got %q", ct)
+	}
+	if !strings.Contains(rec.Body.String(), "No differences") {
+		t.Error("expected 'No differences' message")
+	}
+}
+
+func TestDiffs_MissingFromNomad(t *testing.T) {
+	diffs := []nomad.JobDiff{
+		{JobID: "new-job", HCLFile: "jobs/new-job.hcl", DiffType: nomad.DiffTypeMissingFromNomad},
+	}
+	srv, _ := newTestServer(t, diffs)
+	req := httptest.NewRequest(http.MethodGet, "/diffs", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+	if !strings.Contains(body, `+ Job:`) {
+		t.Error("missing-from-nomad job should render with '+' prefix")
+	}
+	if !strings.Contains(body, "new-job") {
+		t.Error("job ID should appear in output")
+	}
+}
+
+func TestDiffs_MissingFromHCL(t *testing.T) {
+	diffs := []nomad.JobDiff{
+		{JobID: "orphan", DiffType: nomad.DiffTypeMissingFromHCL, Detail: "running but no HCL"},
+	}
+	srv, _ := newTestServer(t, diffs)
+	req := httptest.NewRequest(http.MethodGet, "/diffs", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+	if !strings.Contains(body, `- Job:`) {
+		t.Error("missing-from-hcl job should render with '-' prefix")
+	}
+}
+
+func TestDiffs_Modified_WithPlanDiff(t *testing.T) {
+	diffs := []nomad.JobDiff{
+		{
+			JobID:    "api",
+			HCLFile:  "jobs/api.hcl",
+			DiffType: nomad.DiffTypeModified,
+			PlanDiff: &nomadapi.JobDiff{
+				Type: "Edited",
+				ID:   "api",
+				TaskGroups: []*nomadapi.TaskGroupDiff{
+					{
+						Type: "Edited",
+						Name: "web",
+						Tasks: []*nomadapi.TaskDiff{
+							{
+								Type: "Edited",
+								Name: "server",
+								Objects: []*nomadapi.ObjectDiff{
+									{
+										Type: "Edited",
+										Name: "Config",
+										Fields: []*nomadapi.FieldDiff{
+											{Type: "Edited", Name: "image", Old: "nginx:1.19", New: "nginx:1.21"},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	srv, _ := newTestServer(t, diffs)
+	req := httptest.NewRequest(http.MethodGet, "/diffs", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+	if !strings.Contains(body, "+/- Job:") {
+		t.Error("modified job should render with '+/-' prefix")
+	}
+	if !strings.Contains(body, "Task Group:") {
+		t.Error("task group diff should appear in output")
+	}
+	if !strings.Contains(body, `"nginx:1.19" => "nginx:1.21"`) {
+		t.Error("field diff old/new values should appear in output")
+	}
 }
 
 // ── /healthz ──────────────────────────────────────────────────────────────────
