@@ -460,6 +460,68 @@ func TestWebhook_CounterByEvent(t *testing.T) {
 	}
 }
 
+// ── webhook timestamp tracking ────────────────────────────────────────────────
+
+func TestWebhook_SuccessTimestampOnIndex(t *testing.T) {
+	srv, _ := newTestServer(t, nil)
+
+	// Before any webhook the index should have no webhook timestamp.
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if strings.Contains(rec.Body.String(), "Last webhook") {
+		t.Error("index should not show webhook line before any webhook is received")
+	}
+
+	// Fire a push webhook.
+	srv.Handler().ServeHTTP(httptest.NewRecorder(), githubPushRequest(t, "", "main", "abc123"))
+
+	rec = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	body := rec.Body.String()
+	if !strings.Contains(body, "Last webhook") {
+		t.Error("index should show webhook line after a successful webhook")
+	}
+	if !strings.Contains(body, "ok") {
+		t.Error("index should show 'ok' timestamp after successful webhook")
+	}
+}
+
+func TestWebhook_FailureTimestampOnIndex(t *testing.T) {
+	const secret = "mykey"
+	srv, _ := newTestServerWithConfig(t, nil, secret, "main")
+
+	// Bad signature → failure.
+	body := []byte(`{"ref":"refs/heads/main","before":"000","after":"abc","commits":[]}`)
+	req := httptest.NewRequest(http.MethodPost, "/webhook", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-GitHub-Event", "push")
+	req.Header.Set("X-GitHub-Delivery", "fail-test")
+	req.Header.Set("X-Hub-Signature-256", "sha256=invalidsignature")
+	srv.Handler().ServeHTTP(httptest.NewRecorder(), req)
+
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	indexBody := rec.Body.String()
+	if !strings.Contains(indexBody, "Last webhook") {
+		t.Error("index should show webhook line after a failed webhook")
+	}
+	if !strings.Contains(indexBody, "failed") {
+		t.Error("index should show 'failed' timestamp after a webhook error")
+	}
+}
+
+func TestWebhook_SuccessGauge(t *testing.T) {
+	_, _, reg := newTestServerWithRegistry(t, nil, "", "main")
+	srv, _ := newTestServerWithConfig(t, nil, "", "main")
+	srv.Handler().ServeHTTP(httptest.NewRecorder(), githubPushRequest(t, "", "main", "abc"))
+
+	// Gauge should be registered (even if we can't easily check the exact value here).
+	if count := testutil.CollectAndCount(reg, "nomad_botherer_last_webhook_success_timestamp_seconds"); count == 0 {
+		t.Error("last_webhook_success gauge not registered")
+	}
+}
+
 func TestWebhook_WithSecret_InvalidSignature_Rejected(t *testing.T) {
 	const secret = "super-secret-webhook-key"
 	srv, gitSrc := newTestServerWithConfig(t, nil, secret, "main")

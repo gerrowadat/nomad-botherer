@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	webhookgithub "github.com/go-playground/webhooks/v6/github"
@@ -40,8 +41,14 @@ type Server struct {
 	version string
 	mux     *http.ServeMux
 
+	webhookMu          sync.RWMutex
+	lastWebhookSuccess time.Time
+	lastWebhookFailure time.Time
+
 	// Prometheus metrics
-	webhookEvents *prometheus.CounterVec
+	webhookEvents          *prometheus.CounterVec
+	lastWebhookSuccessGauge prometheus.Gauge
+	lastWebhookFailureGauge prometheus.Gauge
 }
 
 // New creates a Server that registers Prometheus metrics into the default registry.
@@ -62,6 +69,14 @@ func NewWithRegistry(cfg *config.Config, diffs DiffSource, git GitStatusSource, 
 			Name: "nomad_botherer_webhook_events_total",
 			Help: "Total number of webhook events received, by event type.",
 		}, []string{"event"}),
+		lastWebhookSuccessGauge: promauto.With(reg).NewGauge(prometheus.GaugeOpts{
+			Name: "nomad_botherer_last_webhook_success_timestamp_seconds",
+			Help: "Unix timestamp of the most recent successfully parsed webhook.",
+		}),
+		lastWebhookFailureGauge: promauto.With(reg).NewGauge(prometheus.GaugeOpts{
+			Name: "nomad_botherer_last_webhook_failure_timestamp_seconds",
+			Help: "Unix timestamp of the most recent webhook that failed to parse.",
+		}),
 	}
 
 	// Static info metric carrying the build version.
@@ -140,7 +155,13 @@ var indexTmpl = template.Must(template.New("index").Parse(`<!DOCTYPE html>
     {{- end}}
   </p>
   {{- if .LastCheck}}
-  <p>Last check: {{.LastCheck}}{{if .Commit}} (commit <code>{{.Commit}}</code>){{end}}</p>
+  <p>Last diff check: {{.LastCheck}}{{if .Commit}} (commit <code>{{.Commit}}</code>){{end}}</p>
+  {{- end}}
+  {{- if (or .LastWebhookOK .LastWebhookFail)}}
+  <p>Last webhook:
+    {{- if .LastWebhookOK}} ok <code>{{.LastWebhookOK}}</code>{{end}}
+    {{- if .LastWebhookFail}} &nbsp; failed <code>{{.LastWebhookFail}}</code>{{end}}
+  </p>
   {{- end}}
   <ul>
     <li><a href="/diffs">/diffs</a> — current job diffs (plan-style)</li>
@@ -154,11 +175,18 @@ var indexTmpl = template.Must(template.New("index").Parse(`<!DOCTYPE html>
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	diffs, lastCheck, commit := s.diffs.Diffs()
 
+	s.webhookMu.RLock()
+	lastOK := s.lastWebhookSuccess
+	lastFail := s.lastWebhookFailure
+	s.webhookMu.RUnlock()
+
 	data := struct {
-		Version   string
-		DiffCount int
-		LastCheck string
-		Commit    string
+		Version        string
+		DiffCount      int
+		LastCheck      string
+		Commit         string
+		LastWebhookOK  string
+		LastWebhookFail string
 	}{
 		Version:   s.version,
 		DiffCount: len(diffs),
@@ -166,6 +194,12 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	}
 	if !lastCheck.IsZero() {
 		data.LastCheck = lastCheck.Format(time.RFC3339)
+	}
+	if !lastOK.IsZero() {
+		data.LastWebhookOK = lastOK.Format(time.RFC3339)
+	}
+	if !lastFail.IsZero() {
+		data.LastWebhookFail = lastFail.Format(time.RFC3339)
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -246,15 +280,24 @@ func (s *Server) handleWebhook() http.HandlerFunc {
 	}
 
 	return func(w http.ResponseWriter, r *http.Request) {
+		eventType := r.Header.Get("X-GitHub-Event")
+		deliveryID := r.Header.Get("X-GitHub-Delivery")
+
 		payload, err := hook.Parse(r, webhookgithub.PushEvent, webhookgithub.PingEvent)
 		if err != nil {
 			if err == webhookgithub.ErrEventNotFound {
 				s.webhookEvents.WithLabelValues("unknown").Inc()
+				slog.Debug("Ignoring unhandled webhook event", "event", eventType, "delivery", deliveryID)
 				w.WriteHeader(http.StatusOK)
 				return
 			}
 			s.webhookEvents.WithLabelValues("error").Inc()
-			slog.Warn("Webhook parse error", "err", err)
+			slog.Warn("Webhook rejected", "event", eventType, "delivery", deliveryID, "err", err)
+			now := time.Now()
+			s.webhookMu.Lock()
+			s.lastWebhookFailure = now
+			s.webhookMu.Unlock()
+			s.lastWebhookFailureGauge.Set(float64(now.Unix()))
 			http.Error(w, "bad webhook payload", http.StatusBadRequest)
 			return
 		}
@@ -263,14 +306,34 @@ func (s *Server) handleWebhook() http.HandlerFunc {
 		case webhookgithub.PushPayload:
 			s.webhookEvents.WithLabelValues("push").Inc()
 			branch := strings.TrimPrefix(p.Ref, "refs/heads/")
-			slog.Info("Received push webhook", "branch", branch, "commit", p.After)
+			slog.Info("Received push webhook",
+				"delivery", deliveryID,
+				"repo", p.Repository.FullName,
+				"branch", branch,
+				"before", p.Before,
+				"after", p.After,
+				"commits", len(p.Commits),
+				"pusher", p.Pusher.Name,
+				"compare", p.Compare,
+			)
 			if branch == s.cfg.Branch {
 				s.git.Trigger()
 			}
 		case webhookgithub.PingPayload:
 			s.webhookEvents.WithLabelValues("ping").Inc()
-			slog.Info("Received ping webhook", "hook_id", p.HookID)
+			slog.Info("Received ping webhook",
+				"delivery", deliveryID,
+				"hook_id", p.HookID,
+				"repo", p.Repository.FullName,
+				"events", p.Hook.Events,
+			)
 		}
+
+		now := time.Now()
+		s.webhookMu.Lock()
+		s.lastWebhookSuccess = now
+		s.webhookMu.Unlock()
+		s.lastWebhookSuccessGauge.Set(float64(now.Unix()))
 
 		w.WriteHeader(http.StatusOK)
 	}
