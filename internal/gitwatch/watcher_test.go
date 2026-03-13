@@ -12,9 +12,16 @@ import (
 	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/storage/memory"
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/gerrowadat/nomad-botherer/internal/config"
 )
+
+// newTestWatcher creates a Watcher with a throwaway registry so tests don't
+// collide on DefaultRegisterer.
+func newTestWatcher(cfg *config.Config, onChange func(string)) *Watcher {
+	return NewWithRegistry(cfg, onChange, prometheus.NewRegistry())
+}
 
 // makeTestRepo creates a fully in-memory git repo containing the given files
 // and an initial commit, with no remote configured.
@@ -98,7 +105,7 @@ func TestNew(t *testing.T) {
 	called := false
 	onChange := func(string) { called = true }
 
-	w := New(cfg, onChange)
+	w := newTestWatcher(cfg, onChange)
 
 	if w.cfg != cfg {
 		t.Error("cfg not stored")
@@ -119,7 +126,7 @@ func TestNew(t *testing.T) {
 // ── Status / LastCommit ───────────────────────────────────────────────────────
 
 func TestWatcher_Status_ZeroValue(t *testing.T) {
-	w := New(&config.Config{}, nil)
+	w := newTestWatcher(&config.Config{}, nil)
 	commit, updated := w.Status()
 	if commit != "" {
 		t.Errorf("want empty commit, got %q", commit)
@@ -151,7 +158,7 @@ func TestWatcher_Status_AfterSet(t *testing.T) {
 // ── Trigger ───────────────────────────────────────────────────────────────────
 
 func TestWatcher_Trigger_NonBlocking(t *testing.T) {
-	w := New(&config.Config{PollInterval: time.Minute}, nil)
+	w := newTestWatcher(&config.Config{PollInterval: time.Minute}, nil)
 
 	// Should never block even when called many times with no reader.
 	for i := 0; i < 10; i++ {
@@ -160,7 +167,7 @@ func TestWatcher_Trigger_NonBlocking(t *testing.T) {
 }
 
 func TestWatcher_Trigger_SendsSignal(t *testing.T) {
-	w := New(&config.Config{PollInterval: time.Minute}, nil)
+	w := newTestWatcher(&config.Config{PollInterval: time.Minute}, nil)
 	w.Trigger()
 
 	select {
@@ -174,7 +181,7 @@ func TestWatcher_Trigger_SendsSignal(t *testing.T) {
 // ── Run ───────────────────────────────────────────────────────────────────────
 
 func TestWatcher_Run_ReturnsOnContextCancel(t *testing.T) {
-	w := New(&config.Config{PollInterval: time.Minute}, nil)
+	w := newTestWatcher(&config.Config{PollInterval: time.Minute}, nil)
 	// Inject a repo so pull() has something to work with if the ticker fires
 	// (it won't in this test since PollInterval is long, but be safe).
 	w.repo = makeTestRepo(t, map[string]string{"dummy.hcl": `job "x" {}`})

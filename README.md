@@ -183,7 +183,14 @@ Standard Prometheus endpoint. Key metrics:
 |--------|------|--------|-------------|
 | `nomad_botherer_job_diffs` | Gauge | `job`, `diff_type` | 1 for each active drift entry |
 | `nomad_botherer_last_check_timestamp_seconds` | Gauge | — | Unix time of last diff check |
-| `nomad_botherer_git_last_update_timestamp_seconds` | Gauge | — | Unix time of last git fetch |
+| `nomad_botherer_diff_checks_total` | Counter | — | Total diff checks run |
+| `nomad_botherer_nomad_api_errors_total` | Counter | `op` (`info`, `plan`, `list`) | Nomad API errors by operation |
+| `nomad_botherer_hcl_parse_errors_total` | Counter | — | HCL files that failed to parse |
+| `nomad_botherer_hcl_non_job_files_skipped_total` | Counter | — | HCL files skipped (no job stanza) |
+| `nomad_botherer_git_fetches_total` | Counter | — | Total remote git fetch/clone attempts |
+| `nomad_botherer_git_fetch_errors_total` | Counter | — | Remote git fetch/clone failures |
+| `nomad_botherer_git_last_update_timestamp_seconds` | Gauge | — | Unix time of last successful git fetch |
+| `nomad_botherer_webhook_events_total` | Counter | `event` (`push`, `ping`, `unknown`, `error`) | Webhook events received |
 | `nomad_botherer_info` | Gauge | `version` | Build version info |
 
 **Example Prometheus alert:**
