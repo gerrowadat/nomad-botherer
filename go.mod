@@ -7,6 +7,7 @@ require (
 	github.com/go-git/go-git/v5 v5.17.0
 	github.com/go-playground/webhooks/v6 v6.4.0
 	github.com/hashicorp/nomad/api v0.0.0-20260306161221-000e1028d589
+	github.com/joho/godotenv v1.5.1
 	github.com/prometheus/client_golang v1.23.2
 )
 
@@ -29,8 +30,8 @@ require (
 	github.com/hashicorp/go-multierror v1.1.1 // indirect
 	github.com/hashicorp/go-rootcerts v1.0.2 // indirect
 	github.com/jbenet/go-context v0.0.0-20150711004518-d14ea06fba99 // indirect
-	github.com/joho/godotenv v1.5.1 // indirect
 	github.com/kevinburke/ssh_config v1.2.0 // indirect
+	github.com/kylelemons/godebug v1.1.0 // indirect
 	github.com/mitchellh/go-homedir v1.1.0 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/pjbgf/sha1cd v0.3.2 // indirect

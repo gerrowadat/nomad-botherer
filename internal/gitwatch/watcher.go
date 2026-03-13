@@ -18,6 +18,8 @@ import (
 	gitssh "github.com/go-git/go-git/v5/plumbing/transport/ssh"
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/go-git/go-git/v5/storage/memory"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 
 	"github.com/gerrowadat/nomad-botherer/internal/config"
 )
@@ -33,15 +35,37 @@ type Watcher struct {
 
 	triggerCh chan struct{}
 	onChange  func(commit string)
+
+	gitFetches     prometheus.Counter
+	gitFetchErrors prometheus.Counter
+	gitLastUpdate  prometheus.Gauge
 }
 
-// New creates a Watcher. onChange is called whenever a new commit is detected
-// on the watched branch; it receives the new commit SHA.
+// New creates a Watcher that registers metrics into the default Prometheus registry.
 func New(cfg *config.Config, onChange func(commit string)) *Watcher {
+	return NewWithRegistry(cfg, onChange, prometheus.DefaultRegisterer)
+}
+
+// NewWithRegistry creates a Watcher that registers metrics into reg.
+// Use this in tests to avoid duplicate-registration panics.
+func NewWithRegistry(cfg *config.Config, onChange func(commit string), reg prometheus.Registerer) *Watcher {
+	f := promauto.With(reg)
 	return &Watcher{
 		cfg:       cfg,
 		triggerCh: make(chan struct{}, 1),
 		onChange:  onChange,
+		gitFetches: f.NewCounter(prometheus.CounterOpts{
+			Name: "nomad_botherer_git_fetches_total",
+			Help: "Total number of remote git fetch/clone attempts.",
+		}),
+		gitFetchErrors: f.NewCounter(prometheus.CounterOpts{
+			Name: "nomad_botherer_git_fetch_errors_total",
+			Help: "Total number of remote git fetch/clone failures.",
+		}),
+		gitLastUpdate: f.NewGauge(prometheus.GaugeOpts{
+			Name: "nomad_botherer_git_last_update_timestamp_seconds",
+			Help: "Unix timestamp of the most recent successful git fetch.",
+		}),
 	}
 }
 
@@ -53,6 +77,7 @@ func (w *Watcher) Clone(ctx context.Context) error {
 	}
 
 	slog.Info("Cloning repository", "url", w.cfg.RepoURL, "branch", w.cfg.Branch)
+	w.gitFetches.Inc()
 
 	storer := memory.NewStorage()
 	fs := memfs.New()
@@ -65,20 +90,24 @@ func (w *Watcher) Clone(ctx context.Context) error {
 		Progress:      nil,
 	})
 	if err != nil {
+		w.gitFetchErrors.Inc()
 		return fmt.Errorf("cloning %s: %w", w.cfg.RepoURL, err)
 	}
 
 	commit, err := headCommit(repo)
 	if err != nil {
+		w.gitFetchErrors.Inc()
 		return err
 	}
 
+	now := time.Now()
 	w.mu.Lock()
 	w.repo = repo
 	w.lastCommit = commit
-	w.lastUpdate = time.Now()
+	w.lastUpdate = now
 	w.mu.Unlock()
 
+	w.gitLastUpdate.Set(float64(now.Unix()))
 	slog.Info("Repository cloned", "commit", commit)
 	return nil
 }
@@ -196,6 +225,7 @@ func (w *Watcher) pull(ctx context.Context) {
 		return
 	}
 
+	w.gitFetches.Inc()
 	err = wt.PullContext(ctx, &git.PullOptions{
 		RemoteName:    "origin",
 		ReferenceName: plumbing.NewBranchReferenceName(w.cfg.Branch),
@@ -204,12 +234,13 @@ func (w *Watcher) pull(ctx context.Context) {
 		Auth:          auth,
 	})
 	if err != nil && err != git.NoErrAlreadyUpToDate {
+		w.gitFetchErrors.Inc()
 		slog.Warn("Pull failed, attempting re-clone", "err", err)
 		if err2 := w.Clone(ctx); err2 != nil {
 			slog.Error("Re-clone failed", "err", err2)
 			return
 		}
-		// Clone already updated state; check if commit changed.
+		// Clone already updated state and gauges; check if commit changed.
 	}
 
 	commit, err := headCommit(repo)
@@ -218,11 +249,14 @@ func (w *Watcher) pull(ctx context.Context) {
 		return
 	}
 
+	now := time.Now()
 	w.mu.Lock()
 	prev := w.lastCommit
 	w.lastCommit = commit
-	w.lastUpdate = time.Now()
+	w.lastUpdate = now
 	w.mu.Unlock()
+
+	w.gitLastUpdate.Set(float64(now.Unix()))
 
 	if commit != prev {
 		slog.Info("New commit on branch", "branch", w.cfg.Branch, "commit", commit, "prev", prev)

@@ -41,9 +41,7 @@ type Server struct {
 	mux     *http.ServeMux
 
 	// Prometheus metrics
-	jobDiffsGauge      *prometheus.GaugeVec
-	lastCheckGauge     prometheus.Gauge
-	gitLastUpdateGauge prometheus.Gauge
+	webhookEvents *prometheus.CounterVec
 }
 
 // New creates a Server that registers Prometheus metrics into the default registry.
@@ -60,20 +58,10 @@ func NewWithRegistry(cfg *config.Config, diffs DiffSource, git GitStatusSource, 
 		git:     git,
 		version: version,
 
-		jobDiffsGauge: promauto.With(reg).NewGaugeVec(prometheus.GaugeOpts{
-			Name: "nomad_botherer_job_diffs",
-			Help: "1 for each job/diff-type combination currently detected.",
-		}, []string{"job", "diff_type"}),
-
-		lastCheckGauge: promauto.With(reg).NewGauge(prometheus.GaugeOpts{
-			Name: "nomad_botherer_last_check_timestamp_seconds",
-			Help: "Unix timestamp of the most recent diff check.",
-		}),
-
-		gitLastUpdateGauge: promauto.With(reg).NewGauge(prometheus.GaugeOpts{
-			Name: "nomad_botherer_git_last_update_timestamp_seconds",
-			Help: "Unix timestamp of the most recent git fetch.",
-		}),
+		webhookEvents: promauto.With(reg).NewCounterVec(prometheus.CounterOpts{
+			Name: "nomad_botherer_webhook_events_total",
+			Help: "Total number of webhook events received, by event type.",
+		}, []string{"event"}),
 	}
 
 	// Static info metric carrying the build version.
@@ -212,18 +200,6 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	diffs, lastCheck, gitCommit := s.diffs.Diffs()
 	_, gitUpdated := s.git.Status()
 
-	// Update Prometheus gauges on every scrape of /healthz too.
-	s.jobDiffsGauge.Reset()
-	for _, d := range diffs {
-		s.jobDiffsGauge.WithLabelValues(d.JobID, string(d.DiffType)).Set(1)
-	}
-	if !lastCheck.IsZero() {
-		s.lastCheckGauge.Set(float64(lastCheck.Unix()))
-	}
-	if !gitUpdated.IsZero() {
-		s.gitLastUpdateGauge.Set(float64(gitUpdated.Unix()))
-	}
-
 	status := "ok"
 	if len(diffs) > 0 {
 		status = "diffs_detected"
@@ -273,10 +249,11 @@ func (s *Server) handleWebhook() http.HandlerFunc {
 		payload, err := hook.Parse(r, webhookgithub.PushEvent, webhookgithub.PingEvent)
 		if err != nil {
 			if err == webhookgithub.ErrEventNotFound {
-				// Event type we don't care about — acknowledge and move on.
+				s.webhookEvents.WithLabelValues("unknown").Inc()
 				w.WriteHeader(http.StatusOK)
 				return
 			}
+			s.webhookEvents.WithLabelValues("error").Inc()
 			slog.Warn("Webhook parse error", "err", err)
 			http.Error(w, "bad webhook payload", http.StatusBadRequest)
 			return
@@ -284,12 +261,14 @@ func (s *Server) handleWebhook() http.HandlerFunc {
 
 		switch p := payload.(type) {
 		case webhookgithub.PushPayload:
+			s.webhookEvents.WithLabelValues("push").Inc()
 			branch := strings.TrimPrefix(p.Ref, "refs/heads/")
 			slog.Info("Received push webhook", "branch", branch, "commit", p.After)
 			if branch == s.cfg.Branch {
 				s.git.Trigger()
 			}
 		case webhookgithub.PingPayload:
+			s.webhookEvents.WithLabelValues("ping").Inc()
 			slog.Info("Received ping webhook", "hook_id", p.HookID)
 		}
 

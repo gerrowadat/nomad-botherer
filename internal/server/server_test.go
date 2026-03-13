@@ -14,6 +14,7 @@ import (
 
 	nomadapi "github.com/hashicorp/nomad/api"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/gerrowadat/nomad-botherer/internal/config"
 	"github.com/gerrowadat/nomad-botherer/internal/nomad"
@@ -49,6 +50,14 @@ func newTestServer(t *testing.T, diffs []nomad.JobDiff) (*server.Server, *mockGi
 
 func newTestServerWithConfig(t *testing.T, diffs []nomad.JobDiff, webhookSecret, branch string) (*server.Server, *mockGitSource) {
 	t.Helper()
+	srv, gitSrc, _ := newTestServerWithRegistry(t, diffs, webhookSecret, branch)
+	return srv, gitSrc
+}
+
+// newTestServerWithRegistry is like newTestServerWithConfig but also returns
+// the Prometheus registry so tests can gather metric values.
+func newTestServerWithRegistry(t *testing.T, diffs []nomad.JobDiff, webhookSecret, branch string) (*server.Server, *mockGitSource, *prometheus.Registry) {
+	t.Helper()
 	cfg := &config.Config{
 		ListenAddr:    ":0",
 		WebhookPath:   "/webhook",
@@ -64,8 +73,9 @@ func newTestServerWithConfig(t *testing.T, diffs []nomad.JobDiff, webhookSecret,
 		lastCommit: "deadbeef",
 		lastUpdate: time.Now(),
 	}
-	srv := server.NewWithRegistry(cfg, diffSrc, gitSrc, "test", prometheus.NewRegistry())
-	return srv, gitSrc
+	reg := prometheus.NewRegistry()
+	srv := server.NewWithRegistry(cfg, diffSrc, gitSrc, "test", reg)
+	return srv, gitSrc, reg
 }
 
 // githubPushRequest builds a minimal GitHub push webhook request.
@@ -395,6 +405,58 @@ func TestWebhook_WithSecret_ValidSignature_Triggers(t *testing.T) {
 	}
 	if !gitSrc.triggered {
 		t.Error("Trigger() should have been called with a valid signature")
+	}
+}
+
+// ── webhook event counters ────────────────────────────────────────────────────
+
+func TestWebhook_PushCounter(t *testing.T) {
+	srv, _, reg := newTestServerWithRegistry(t, nil, "", "main")
+	srv.Handler().ServeHTTP(httptest.NewRecorder(), githubPushRequest(t, "", "main", "abc"))
+	if count := testutil.CollectAndCount(reg, "nomad_botherer_webhook_events_total"); count == 0 {
+		t.Error("expected webhook_events_total to be registered")
+	}
+}
+
+func TestWebhook_CounterByEvent(t *testing.T) {
+	srv, _, reg := newTestServerWithRegistry(t, nil, "", "main")
+
+	// push
+	srv.Handler().ServeHTTP(httptest.NewRecorder(), githubPushRequest(t, "", "main", "abc"))
+	// ping
+	srv.Handler().ServeHTTP(httptest.NewRecorder(), githubPingRequest(t))
+	// unknown event
+	unknownReq := httptest.NewRequest(http.MethodPost, "/webhook", bytes.NewReader([]byte(`{}`)))
+	unknownReq.Header.Set("Content-Type", "application/json")
+	unknownReq.Header.Set("X-GitHub-Event", "issues")
+	unknownReq.Header.Set("X-GitHub-Delivery", "x")
+	srv.Handler().ServeHTTP(httptest.NewRecorder(), unknownReq)
+
+	families, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+	counts := map[string]float64{}
+	for _, mf := range families {
+		if mf.GetName() != "nomad_botherer_webhook_events_total" {
+			continue
+		}
+		for _, m := range mf.GetMetric() {
+			for _, lp := range m.GetLabel() {
+				if lp.GetName() == "event" {
+					counts[lp.GetValue()] = m.GetCounter().GetValue()
+				}
+			}
+		}
+	}
+	if counts["push"] != 1 {
+		t.Errorf("push counter: want 1, got %v", counts["push"])
+	}
+	if counts["ping"] != 1 {
+		t.Errorf("ping counter: want 1, got %v", counts["ping"])
+	}
+	if counts["unknown"] != 1 {
+		t.Errorf("unknown counter: want 1, got %v", counts["unknown"])
 	}
 }
 

@@ -65,13 +65,17 @@ type Differ struct {
 	namespace       string
 	includeDeadJobs bool
 
-	mu         sync.RWMutex
-	diffs      []JobDiff
-	lastCheck  time.Time
-	lastCommit string
+	mu            sync.RWMutex
+	diffs         []JobDiff
+	lastCheckTime time.Time
+	lastCommit    string
 
 	hclParseErrors  prometheus.Counter
 	hclFilesSkipped prometheus.Counter
+	diffChecks      prometheus.Counter
+	nomadAPIErrors  *prometheus.CounterVec
+	lastCheck       prometheus.Gauge
+	jobDiffs        *prometheus.GaugeVec
 }
 
 // newDifferBase constructs a Differ with metrics registered into reg.
@@ -89,6 +93,22 @@ func newDifferBase(jobs NomadJobsClient, namespace string, includeDeadJobs bool,
 			Name: "nomad_botherer_hcl_non_job_files_skipped_total",
 			Help: "Total number of HCL files skipped because they lack a top-level job stanza (e.g. ACL policies, volumes).",
 		}),
+		diffChecks: f.NewCounter(prometheus.CounterOpts{
+			Name: "nomad_botherer_diff_checks_total",
+			Help: "Total number of diff checks run against the Nomad cluster.",
+		}),
+		nomadAPIErrors: f.NewCounterVec(prometheus.CounterOpts{
+			Name: "nomad_botherer_nomad_api_errors_total",
+			Help: "Total number of Nomad API errors by operation.",
+		}, []string{"op"}),
+		lastCheck: f.NewGauge(prometheus.GaugeOpts{
+			Name: "nomad_botherer_last_check_timestamp_seconds",
+			Help: "Unix timestamp of the most recent diff check.",
+		}),
+		jobDiffs: f.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "nomad_botherer_job_diffs",
+			Help: "1 for each job/diff-type combination currently detected.",
+		}, []string{"job", "diff_type"}),
 	}
 }
 
@@ -117,6 +137,7 @@ func NewWithClient(cfg *config.Config, jobs NomadJobsClient) *Differ {
 // cluster and stores the results. commit is recorded for informational purposes.
 func (d *Differ) Check(hclFiles map[string]string, commit string) error {
 	slog.Info("Running diff check", "commit", commit, "hcl_files", len(hclFiles))
+	d.diffChecks.Inc()
 
 	q := &nomadapi.QueryOptions{Namespace: d.namespace}
 	wq := &nomadapi.WriteOptions{Namespace: d.namespace}
@@ -165,6 +186,7 @@ func (d *Differ) Check(hclFiles map[string]string, commit string) error {
 				})
 				continue
 			}
+			d.nomadAPIErrors.WithLabelValues("info").Inc()
 			slog.Warn("Failed to query job from Nomad", "job", jobID, "err", err)
 			continue
 		}
@@ -185,6 +207,7 @@ func (d *Differ) Check(hclFiles map[string]string, commit string) error {
 		// Job exists and is live — run a plan to detect config drift.
 		plan, _, err := d.jobs.Plan(job, true, wq)
 		if err != nil {
+			d.nomadAPIErrors.WithLabelValues("plan").Inc()
 			slog.Warn("Failed to plan job", "job", jobID, "err", err)
 			continue
 		}
@@ -205,6 +228,7 @@ func (d *Differ) Check(hclFiles map[string]string, commit string) error {
 	// job without HCL is expected (it was stopped intentionally).
 	allJobs, _, err := d.jobs.List(q)
 	if err != nil {
+		d.nomadAPIErrors.WithLabelValues("list").Inc()
 		slog.Warn("Failed to list Nomad jobs", "err", err)
 	} else {
 		for _, j := range allJobs {
@@ -221,11 +245,18 @@ func (d *Differ) Check(hclFiles map[string]string, commit string) error {
 		}
 	}
 
+	now := time.Now()
 	d.mu.Lock()
 	d.diffs = diffs
-	d.lastCheck = time.Now()
+	d.lastCheckTime = now
 	d.lastCommit = commit
 	d.mu.Unlock()
+
+	d.lastCheck.Set(float64(now.Unix()))
+	d.jobDiffs.Reset()
+	for _, diff := range diffs {
+		d.jobDiffs.WithLabelValues(diff.JobID, string(diff.DiffType)).Set(1)
+	}
 
 	slog.Info("Diff check complete", "diffs", len(diffs), "commit", commit)
 	return nil
@@ -238,7 +269,7 @@ func (d *Differ) Diffs() ([]JobDiff, time.Time, string) {
 	defer d.mu.RUnlock()
 	result := make([]JobDiff, len(d.diffs))
 	copy(result, d.diffs)
-	return result, d.lastCheck, d.lastCommit
+	return result, d.lastCheckTime, d.lastCommit
 }
 
 func isNotFound(err error) bool {
