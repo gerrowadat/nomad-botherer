@@ -312,6 +312,70 @@ func TestDiffer_DeadJobInNomad_NoHCL_NotReported(t *testing.T) {
 	}
 }
 
+func TestDiffer_NilJobID_Skipped(t *testing.T) {
+	mock := defaultMock()
+	mock.parseHCLFn = func(jobHCL string, normalize bool) (*nomadapi.Job, error) {
+		return &nomadapi.Job{ID: nil}, nil
+	}
+	d := newTestDiffer(mock)
+
+	if err := d.Check(map[string]string{`job.hcl`: `job "x" {}`}, "abc"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	diffs, _, _ := d.Diffs()
+	if len(diffs) != 0 {
+		t.Errorf("nil job ID should be skipped, got %d diffs", len(diffs))
+	}
+}
+
+func TestDiffer_InfoNonNotFoundError_Skipped(t *testing.T) {
+	mock := defaultMock()
+	mock.infoFn = func(jobID string, q *nomadapi.QueryOptions) (*nomadapi.Job, *nomadapi.QueryMeta, error) {
+		return nil, nil, fmt.Errorf("connection refused")
+	}
+	d := newTestDiffer(mock)
+
+	if err := d.Check(map[string]string{`job.hcl`: `job "test-job" {}`}, "abc"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	diffs, _, _ := d.Diffs()
+	if len(diffs) != 0 {
+		t.Errorf("non-404 info error should be skipped, got %d diffs: %+v", len(diffs), diffs)
+	}
+}
+
+func TestDiffer_PlanError_Skipped(t *testing.T) {
+	mock := defaultMock()
+	mock.planFn = func(job *nomadapi.Job, diff bool, q *nomadapi.WriteOptions) (*nomadapi.JobPlanResponse, *nomadapi.WriteMeta, error) {
+		return nil, nil, fmt.Errorf("server error")
+	}
+	d := newTestDiffer(mock)
+
+	if err := d.Check(map[string]string{`job.hcl`: `job "test-job" {}`}, "abc"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	diffs, _, _ := d.Diffs()
+	if len(diffs) != 0 {
+		t.Errorf("plan error should be skipped, got %d diffs: %+v", len(diffs), diffs)
+	}
+}
+
+func TestDiffer_ListError_Skipped(t *testing.T) {
+	mock := defaultMock()
+	mock.listFn = func(q *nomadapi.QueryOptions) ([]*nomadapi.JobListStub, *nomadapi.QueryMeta, error) {
+		return nil, nil, fmt.Errorf("list failed")
+	}
+	d := newTestDiffer(mock)
+
+	if err := d.Check(map[string]string{}, "abc"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	diffs, _, _ := d.Diffs()
+	if len(diffs) != 0 {
+		t.Errorf("list error should not result in diffs, got %d", len(diffs))
+	}
+}
+
 // TestDiffer_DeadJobInNomad_NoHCL_IncludeDeadJobs verifies that with
 // IncludeDeadJobs=true a dead Nomad job without HCL IS reported as missing_from_hcl.
 func TestDiffer_DeadJobInNomad_NoHCL_IncludeDeadJobs(t *testing.T) {

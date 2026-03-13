@@ -332,6 +332,30 @@ func TestWatcher_ReadHCLFiles_FileContents(t *testing.T) {
 	}
 }
 
+// ── headCommit ────────────────────────────────────────────────────────────────
+
+func TestHeadCommit(t *testing.T) {
+	repo := makeTestRepo(t, map[string]string{"job.hcl": `job "x" {}`})
+	commit, err := headCommit(repo)
+	if err != nil {
+		t.Fatalf("headCommit: %v", err)
+	}
+	if len(commit) != 40 {
+		t.Errorf("expected 40-char SHA, got %d chars: %q", len(commit), commit)
+	}
+}
+
+// ── pull ──────────────────────────────────────────────────────────────────────
+
+// TestWatcher_Pull_NoRemote calls pull() directly on a repo with no remote.
+// pull should fail gracefully: increment error counters, attempt re-clone (which
+// also fails), log errors, and return without panicking.
+func TestWatcher_Pull_NoRemote(t *testing.T) {
+	w := newTestWatcher(&config.Config{RepoURL: "", Branch: "main"}, nil)
+	w.repo = makeTestRepo(t, map[string]string{"job.hcl": `job "x" {}`})
+	w.pull(context.Background()) // must not panic or block
+}
+
 func TestWatcher_ReadHCLFiles_EmptyDir(t *testing.T) {
 	repo := makeTestRepo(t, map[string]string{
 		"jobs/api.hcl": `job "api" {}`,

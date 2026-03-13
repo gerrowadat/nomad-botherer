@@ -512,14 +512,49 @@ func TestWebhook_FailureTimestampOnIndex(t *testing.T) {
 }
 
 func TestWebhook_SuccessGauge(t *testing.T) {
-	_, _, reg := newTestServerWithRegistry(t, nil, "", "main")
-	srv, _ := newTestServerWithConfig(t, nil, "", "main")
+	srv, _, reg := newTestServerWithRegistry(t, nil, "", "main")
 	srv.Handler().ServeHTTP(httptest.NewRecorder(), githubPushRequest(t, "", "main", "abc"))
 
-	// Gauge should be registered (even if we can't easily check the exact value here).
-	if count := testutil.CollectAndCount(reg, "nomad_botherer_last_webhook_success_timestamp_seconds"); count == 0 {
-		t.Error("last_webhook_success gauge not registered")
+	families, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("gather: %v", err)
 	}
+	for _, mf := range families {
+		if mf.GetName() == "nomad_botherer_last_webhook_success_timestamp_seconds" {
+			if v := mf.GetMetric()[0].GetGauge().GetValue(); v == 0 {
+				t.Error("last_webhook_success gauge should be non-zero after a successful webhook")
+			}
+			return
+		}
+	}
+	t.Error("nomad_botherer_last_webhook_success_timestamp_seconds not found in registry")
+}
+
+func TestWebhook_FailureGauge(t *testing.T) {
+	const secret = "mykey"
+	srv, _, reg := newTestServerWithRegistry(t, nil, secret, "main")
+
+	body := []byte(`{"ref":"refs/heads/main","before":"000","after":"abc","commits":[]}`)
+	req := httptest.NewRequest(http.MethodPost, "/webhook", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-GitHub-Event", "push")
+	req.Header.Set("X-GitHub-Delivery", "fail-gauge-test")
+	req.Header.Set("X-Hub-Signature-256", "sha256=invalidsignature")
+	srv.Handler().ServeHTTP(httptest.NewRecorder(), req)
+
+	families, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+	for _, mf := range families {
+		if mf.GetName() == "nomad_botherer_last_webhook_failure_timestamp_seconds" {
+			if v := mf.GetMetric()[0].GetGauge().GetValue(); v == 0 {
+				t.Error("last_webhook_failure gauge should be non-zero after a failed webhook")
+			}
+			return
+		}
+	}
+	t.Error("nomad_botherer_last_webhook_failure_timestamp_seconds not found in registry")
 }
 
 func TestWebhook_WithSecret_InvalidSignature_Rejected(t *testing.T) {
