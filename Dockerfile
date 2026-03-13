@@ -5,7 +5,7 @@
 #     --build-arg VERSION=$(git describe --tags --always --dirty) \
 #     -t ghcr.io/gerrowadat/nomad-botherer:VERSION .
 
-FROM --platform=${BUILDPLATFORM} golang:1.22-alpine AS builder
+FROM --platform=${BUILDPLATFORM} golang:1.24-alpine AS builder
 
 ARG TARGETOS
 ARG TARGETARCH
