@@ -8,6 +8,8 @@
 
 **Do not merge PRs.** Create the branch, commit, push, open the PR — then stop. Leave merging to the human.
 
+**Never push directly to main.** All changes go through a branch and PR, no matter how small. This includes docs, README, and config-only changes.
+
 **Write plain commit messages and PR descriptions.** Describe what changed and why. No superlatives, no "seamlessly", no "robust", no bullet-point sales pitches. A PR description should read like a code review, not a product announcement.
 
 **Do not re-implement incumbents.** Before writing a library or utility from scratch, check whether a well-established Go package exists for it. "Well-established" means high GitHub stars and active maintenance. If something like `go-git`, `prometheus/client_golang`, or `hashicorp/nomad/api` already does the job, use it.
