@@ -57,6 +57,11 @@ func newTestDiffer(mock *mockJobsClient) *nomad.Differ {
 	return nomad.NewWithClient(cfg, mock)
 }
 
+func newTestDifferWithDeadJobs(mock *mockJobsClient) *nomad.Differ {
+	cfg := &config.Config{NomadAddr: "http://localhost:4646", NomadNamespace: "default", IncludeDeadJobs: true}
+	return nomad.NewWithClient(cfg, mock)
+}
+
 func TestDiffer_NoChanges(t *testing.T) {
 	d := newTestDiffer(defaultMock())
 
@@ -238,5 +243,95 @@ func TestDiffer_MultipleDiffTypes(t *testing.T) {
 	diffs, _, _ := d.Diffs()
 	if len(diffs) != 3 {
 		t.Errorf("expected 3 diffs, got %d: %+v", len(diffs), diffs)
+	}
+}
+
+// TestDiffer_DeadJob_TreatedAsMissing verifies that a job found in Nomad with
+// status "dead" is reported as missing_from_nomad by default.
+func TestDiffer_DeadJob_TreatedAsMissing(t *testing.T) {
+	mock := defaultMock()
+	mock.infoFn = func(jobID string, q *nomadapi.QueryOptions) (*nomadapi.Job, *nomadapi.QueryMeta, error) {
+		return &nomadapi.Job{ID: strPtr(jobID), Status: strPtr("dead")}, nil, nil
+	}
+	d := newTestDiffer(mock)
+
+	if err := d.Check(map[string]string{`jobs/test-job.hcl`: `job "test-job" {}`}, "abc123"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	diffs, _, _ := d.Diffs()
+	if len(diffs) != 1 {
+		t.Fatalf("expected 1 diff, got %d: %+v", len(diffs), diffs)
+	}
+	if diffs[0].DiffType != nomad.DiffTypeMissingFromNomad {
+		t.Errorf("expected %s for dead job, got %s", nomad.DiffTypeMissingFromNomad, diffs[0].DiffType)
+	}
+}
+
+// TestDiffer_DeadJob_IncludeDeadJobs verifies that with IncludeDeadJobs=true a
+// dead job is planned against normally (not treated as missing).
+func TestDiffer_DeadJob_IncludeDeadJobs(t *testing.T) {
+	mock := defaultMock()
+	mock.infoFn = func(jobID string, q *nomadapi.QueryOptions) (*nomadapi.Job, *nomadapi.QueryMeta, error) {
+		return &nomadapi.Job{ID: strPtr(jobID), Status: strPtr("dead")}, nil, nil
+	}
+	// Plan returns no diff — job is dead but config matches.
+	mock.planFn = func(job *nomadapi.Job, diff bool, q *nomadapi.WriteOptions) (*nomadapi.JobPlanResponse, *nomadapi.WriteMeta, error) {
+		return &nomadapi.JobPlanResponse{Diff: &nomadapi.JobDiff{Type: "None"}}, nil, nil
+	}
+	d := newTestDifferWithDeadJobs(mock)
+
+	if err := d.Check(map[string]string{`jobs/test-job.hcl`: `job "test-job" {}`}, "abc123"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	diffs, _, _ := d.Diffs()
+	if len(diffs) != 0 {
+		t.Errorf("expected 0 diffs with IncludeDeadJobs=true and no plan diff, got %d: %+v", len(diffs), diffs)
+	}
+}
+
+// TestDiffer_DeadJobInNomad_NoHCL_NotReported verifies that a dead job in
+// Nomad without an HCL file is NOT reported as missing_from_hcl by default.
+func TestDiffer_DeadJobInNomad_NoHCL_NotReported(t *testing.T) {
+	mock := defaultMock()
+	mock.listFn = func(q *nomadapi.QueryOptions) ([]*nomadapi.JobListStub, *nomadapi.QueryMeta, error) {
+		return []*nomadapi.JobListStub{
+			{ID: "stopped-job", Status: "dead"},
+		}, nil, nil
+	}
+	d := newTestDiffer(mock)
+
+	if err := d.Check(map[string]string{}, "abc123"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	diffs, _, _ := d.Diffs()
+	if len(diffs) != 0 {
+		t.Errorf("dead job without HCL should not be reported by default, got %d diffs: %+v", len(diffs), diffs)
+	}
+}
+
+// TestDiffer_DeadJobInNomad_NoHCL_IncludeDeadJobs verifies that with
+// IncludeDeadJobs=true a dead Nomad job without HCL IS reported as missing_from_hcl.
+func TestDiffer_DeadJobInNomad_NoHCL_IncludeDeadJobs(t *testing.T) {
+	mock := defaultMock()
+	mock.listFn = func(q *nomadapi.QueryOptions) ([]*nomadapi.JobListStub, *nomadapi.QueryMeta, error) {
+		return []*nomadapi.JobListStub{
+			{ID: "stopped-job", Status: "dead"},
+		}, nil, nil
+	}
+	d := newTestDifferWithDeadJobs(mock)
+
+	if err := d.Check(map[string]string{}, "abc123"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	diffs, _, _ := d.Diffs()
+	if len(diffs) != 1 {
+		t.Fatalf("expected 1 diff with IncludeDeadJobs=true, got %d: %+v", len(diffs), diffs)
+	}
+	if diffs[0].DiffType != nomad.DiffTypeMissingFromHCL {
+		t.Errorf("expected %s, got %s", nomad.DiffTypeMissingFromHCL, diffs[0].DiffType)
 	}
 }

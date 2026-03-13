@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -28,7 +29,8 @@ type Config struct {
 	WebhookPath   string
 
 	// Diff
-	DiffInterval time.Duration
+	DiffInterval    time.Duration
+	IncludeDeadJobs bool
 
 	// Logging
 	LogLevel string
@@ -61,6 +63,7 @@ func LoadFromArgs(fs *flag.FlagSet, args []string) (*Config, error) {
 	fs.StringVar(&c.WebhookPath, "webhook-path", envOrDefault("WEBHOOK_PATH", "/webhook"), "HTTP path for webhook endpoint")
 
 	fs.DurationVar(&c.DiffInterval, "diff-interval", envDurationOrDefault("DIFF_INTERVAL", time.Minute), "How often to run a diff check regardless of git changes")
+	fs.BoolVar(&c.IncludeDeadJobs, "include-dead-jobs", envBoolOrDefault("INCLUDE_DEAD_JOBS", false), "Treat dead Nomad jobs like running ones (by default dead jobs are treated as missing)")
 
 	fs.StringVar(&c.LogLevel, "log-level", envOrDefault("LOG_LEVEL", "info"), "Log level: debug, info, warn, error")
 
@@ -87,6 +90,18 @@ func envDurationOrDefault(key string, def time.Duration) time.Duration {
 		d, err := time.ParseDuration(v)
 		if err == nil {
 			return d
+		}
+	}
+	return def
+}
+
+func envBoolOrDefault(key string, def bool) bool {
+	if v := os.Getenv(key); v != "" {
+		switch strings.ToLower(v) {
+		case "true", "1", "yes":
+			return true
+		case "false", "0", "no":
+			return false
 		}
 	}
 	return def
