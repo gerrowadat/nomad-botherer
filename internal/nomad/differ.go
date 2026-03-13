@@ -61,8 +61,9 @@ type NomadJobsClient interface {
 
 // Differ runs periodic diff checks and stores the latest results.
 type Differ struct {
-	jobs      NomadJobsClient
-	namespace string
+	jobs            NomadJobsClient
+	namespace       string
+	includeDeadJobs bool
 
 	mu         sync.RWMutex
 	diffs      []JobDiff
@@ -74,11 +75,12 @@ type Differ struct {
 }
 
 // newDifferBase constructs a Differ with metrics registered into reg.
-func newDifferBase(jobs NomadJobsClient, namespace string, reg prometheus.Registerer) *Differ {
+func newDifferBase(jobs NomadJobsClient, namespace string, includeDeadJobs bool, reg prometheus.Registerer) *Differ {
 	f := promauto.With(reg)
 	return &Differ{
-		jobs:      jobs,
-		namespace: namespace,
+		jobs:            jobs,
+		namespace:       namespace,
+		includeDeadJobs: includeDeadJobs,
 		hclParseErrors: f.NewCounter(prometheus.CounterOpts{
 			Name: "nomad_botherer_hcl_parse_errors_total",
 			Help: "Total number of HCL files that failed to parse as Nomad job definitions.",
@@ -103,12 +105,12 @@ func NewDiffer(cfg *config.Config) (*Differ, error) {
 		return nil, fmt.Errorf("creating nomad client: %w", err)
 	}
 
-	return newDifferBase(client.Jobs(), cfg.NomadNamespace, prometheus.DefaultRegisterer), nil
+	return newDifferBase(client.Jobs(), cfg.NomadNamespace, cfg.IncludeDeadJobs, prometheus.DefaultRegisterer), nil
 }
 
 // NewWithClient creates a Differ with a custom jobs client, intended for tests.
 func NewWithClient(cfg *config.Config, jobs NomadJobsClient) *Differ {
-	return newDifferBase(jobs, cfg.NomadNamespace, prometheus.NewRegistry())
+	return newDifferBase(jobs, cfg.NomadNamespace, cfg.IncludeDeadJobs, prometheus.NewRegistry())
 }
 
 // Check compares the given HCL files (path → content) against the live Nomad
@@ -152,7 +154,7 @@ func (d *Differ) Check(hclFiles map[string]string, commit string) error {
 	for jobID, job := range hclJobs {
 		filename := hclJobFile[jobID]
 
-		_, _, err := d.jobs.Info(jobID, q)
+		nomadJob, _, err := d.jobs.Info(jobID, q)
 		if err != nil {
 			if isNotFound(err) {
 				diffs = append(diffs, JobDiff{
@@ -167,7 +169,20 @@ func (d *Differ) Check(hclFiles map[string]string, commit string) error {
 			continue
 		}
 
-		// Job exists — run a plan to detect config drift.
+		// Unless the caller explicitly wants dead jobs included, treat a dead
+		// job the same as a missing one.
+		if !d.includeDeadJobs && nomadJob != nil && nomadJob.Status != nil && *nomadJob.Status == "dead" {
+			slog.Debug("Job is dead in Nomad, treating as missing", "job", jobID)
+			diffs = append(diffs, JobDiff{
+				JobID:    jobID,
+				HCLFile:  filename,
+				DiffType: DiffTypeMissingFromNomad,
+				Detail:   "job is defined in HCL but is in 'dead' state in Nomad",
+			})
+			continue
+		}
+
+		// Job exists and is live — run a plan to detect config drift.
 		plan, _, err := d.jobs.Plan(job, true, wq)
 		if err != nil {
 			slog.Warn("Failed to plan job", "job", jobID, "err", err)
@@ -185,12 +200,17 @@ func (d *Differ) Check(hclFiles map[string]string, commit string) error {
 		}
 	}
 
-	// Find jobs running in Nomad that have no corresponding HCL file.
+	// Find jobs in Nomad that have no corresponding HCL file.
+	// Dead jobs are skipped unless --include-dead-jobs is set, since a dead
+	// job without HCL is expected (it was stopped intentionally).
 	allJobs, _, err := d.jobs.List(q)
 	if err != nil {
 		slog.Warn("Failed to list Nomad jobs", "err", err)
 	} else {
 		for _, j := range allJobs {
+			if !d.includeDeadJobs && j.Status == "dead" {
+				continue
+			}
 			if _, ok := hclJobs[j.ID]; !ok {
 				diffs = append(diffs, JobDiff{
 					JobID:    j.ID,

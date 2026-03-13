@@ -159,6 +159,73 @@ func TestLoadFromArgs_BranchFlag(t *testing.T) {
 	}
 }
 
+func TestEnvBoolOrDefault_Missing(t *testing.T) {
+	const key = "TEST_NOMAD_BOTHERER_BOOL"
+	os.Unsetenv(key)
+	if got := envBoolOrDefault(key, true); got != true {
+		t.Error("missing env should return default")
+	}
+}
+
+func TestEnvBoolOrDefault_True(t *testing.T) {
+	const key = "TEST_NOMAD_BOTHERER_BOOL"
+	for _, v := range []string{"true", "1", "yes", "TRUE", "YES"} {
+		os.Setenv(key, v)
+		t.Cleanup(func() { os.Unsetenv(key) })
+		if !envBoolOrDefault(key, false) {
+			t.Errorf("value %q should be truthy", v)
+		}
+	}
+}
+
+func TestEnvBoolOrDefault_False(t *testing.T) {
+	const key = "TEST_NOMAD_BOTHERER_BOOL"
+	for _, v := range []string{"false", "0", "no", "FALSE"} {
+		os.Setenv(key, v)
+		t.Cleanup(func() { os.Unsetenv(key) })
+		if envBoolOrDefault(key, true) {
+			t.Errorf("value %q should be falsy", v)
+		}
+	}
+}
+
+func TestLoadFromArgs_IncludeDeadJobsDefault(t *testing.T) {
+	os.Unsetenv("INCLUDE_DEAD_JOBS")
+	cfg, err := LoadFromArgs(newFS(), []string{"--repo-url", "https://example.com/r.git"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.IncludeDeadJobs {
+		t.Error("IncludeDeadJobs should default to false")
+	}
+}
+
+func TestLoadFromArgs_IncludeDeadJobsFlag(t *testing.T) {
+	os.Unsetenv("INCLUDE_DEAD_JOBS")
+	cfg, err := LoadFromArgs(newFS(), []string{
+		"--repo-url", "https://example.com/r.git",
+		"--include-dead-jobs",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !cfg.IncludeDeadJobs {
+		t.Error("IncludeDeadJobs should be true when flag is set")
+	}
+}
+
+func TestLoadFromArgs_IncludeDeadJobsEnv(t *testing.T) {
+	os.Setenv("INCLUDE_DEAD_JOBS", "true")
+	t.Cleanup(func() { os.Unsetenv("INCLUDE_DEAD_JOBS") })
+	cfg, err := LoadFromArgs(newFS(), []string{"--repo-url", "https://example.com/r.git"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !cfg.IncludeDeadJobs {
+		t.Error("IncludeDeadJobs should be true when env var is set")
+	}
+}
+
 func TestLoadFromArgs_PollIntervalEnv(t *testing.T) {
 	os.Setenv("POLL_INTERVAL", "10s")
 	t.Cleanup(func() { os.Unsetenv("POLL_INTERVAL") })

@@ -10,8 +10,8 @@ Three kinds of drift are tracked:
 | Diff type | Meaning |
 |-----------|---------|
 | `modified` | Job exists in both HCL and Nomad but the definitions differ (detected via `nomad job plan`) |
-| `missing_from_nomad` | Job defined in HCL but not currently registered in Nomad |
-| `missing_from_hcl` | Job registered in Nomad but has no HCL file in the repo |
+| `missing_from_nomad` | Job defined in HCL but not currently registered in Nomad (dead jobs count as missing by default) |
+| `missing_from_hcl` | Job registered and running in Nomad but has no HCL file in the repo (dead jobs are excluded by default) |
 
 ---
 
@@ -33,9 +33,11 @@ Three kinds of drift are tracked:
 1. On startup, the repo is cloned entirely into memory using [go-git](https://github.com/go-git/go-git).
 2. All `.hcl` files under `--hcl-dir` (default: repo root) are sent to Nomad's `/v1/jobs/parse` endpoint to produce canonical `Job` structs.
 3. For each parsed job:
-   - If the job is **not registered** in Nomad → `missing_from_nomad`
-   - If the job **is registered**, `nomad job plan` is run → if the plan shows changes → `modified`
-4. All jobs **currently running in Nomad** that have no corresponding HCL file → `missing_from_hcl`
+   - If the job is **not registered** in Nomad, or is registered but in **`dead` state** → `missing_from_nomad`
+   - If the job **is registered and live**, `nomad job plan` is run → if the plan shows changes → `modified`
+4. All jobs **currently running in Nomad** (non-dead) that have no corresponding HCL file → `missing_from_hcl`
+
+   Dead jobs are excluded from both checks by default because a stopped job is expected state — it was intentionally halted. Pass `--include-dead-jobs` to treat dead jobs like running ones.
 5. Results are stored in memory and exposed via `/healthz` (JSON) and `/metrics` (Prometheus).
 6. The repo is re-checked on every `--poll-interval` (git fetch), on every `--diff-interval` (Nomad-side drift), and immediately on a webhook push event.
 
@@ -116,6 +118,7 @@ Every flag has a corresponding environment variable. Environment variables are r
 | `--webhook-secret` | `WEBHOOK_SECRET` | | GitHub webhook HMAC secret |
 | `--webhook-path` | `WEBHOOK_PATH` | `/webhook` | Webhook endpoint path |
 | `--diff-interval` | `DIFF_INTERVAL` | `1m` | Periodic Nomad-side drift check interval |
+| `--include-dead-jobs` | `INCLUDE_DEAD_JOBS` | `false` | Treat dead Nomad jobs like running ones (by default dead jobs count as missing) |
 | `--log-level` | `LOG_LEVEL` | `info` | Log level: `debug`, `info`, `warn`, `error` |
 
 Logs are written to stderr as JSON (structured via `log/slog`).
