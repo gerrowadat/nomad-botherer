@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	nomadapi "github.com/hashicorp/nomad/api"
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/gerrowadat/nomad-botherer/internal/config"
 	"github.com/gerrowadat/nomad-botherer/internal/nomad"
@@ -374,6 +375,145 @@ func TestDiffer_ListError_Skipped(t *testing.T) {
 	if len(diffs) != 0 {
 		t.Errorf("list error should not result in diffs, got %d", len(diffs))
 	}
+}
+
+func newTestDifferWithRegistry(mock *mockJobsClient, reg prometheus.Registerer) *nomad.Differ {
+	cfg := &config.Config{NomadAddr: "http://localhost:4646", NomadNamespace: "default"}
+	return nomad.NewWithClientAndRegistry(cfg, mock, reg)
+}
+
+// TestDiffer_DriftedJobsMetric verifies that drifted_jobs gauge is set per diff type.
+func TestDiffer_DriftedJobsMetric(t *testing.T) {
+	mock := defaultMock()
+	mock.infoFn = func(jobID string, q *nomadapi.QueryOptions) (*nomadapi.Job, *nomadapi.QueryMeta, error) {
+		return nil, nil, fmt.Errorf("404: not found")
+	}
+	mock.listFn = func(q *nomadapi.QueryOptions) ([]*nomadapi.JobListStub, *nomadapi.QueryMeta, error) {
+		return []*nomadapi.JobListStub{{ID: "orphan", Status: "running"}}, nil, nil
+	}
+
+	reg := prometheus.NewRegistry()
+	d := newTestDifferWithRegistry(mock, reg)
+
+	if err := d.Check(map[string]string{"a.hcl": `job "test-job" {}`}, "abc"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Gather all metrics and look for the two we care about.
+	mfs, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+	driftedJobs := map[string]float64{}
+	for _, mf := range mfs {
+		if mf.GetName() != "nomad_botherer_drifted_jobs" {
+			continue
+		}
+		for _, m := range mf.GetMetric() {
+			var dt string
+			for _, lp := range m.GetLabel() {
+				if lp.GetName() == "diff_type" {
+					dt = lp.GetValue()
+				}
+			}
+			driftedJobs[dt] = m.GetGauge().GetValue()
+		}
+	}
+	if driftedJobs["missing_from_nomad"] != 1 {
+		t.Errorf("expected drifted_jobs{missing_from_nomad}=1, got %v", driftedJobs["missing_from_nomad"])
+	}
+	if driftedJobs["missing_from_hcl"] != 1 {
+		t.Errorf("expected drifted_jobs{missing_from_hcl}=1, got %v", driftedJobs["missing_from_hcl"])
+	}
+	if _, ok := driftedJobs["modified"]; ok {
+		t.Errorf("modified should not appear in drifted_jobs, got %v", driftedJobs["modified"])
+	}
+}
+
+// TestDiffer_DriftFirstSeen_Persists verifies that first-seen timestamps are
+// preserved across checks as long as drift continues.
+func TestDiffer_DriftFirstSeen_Persists(t *testing.T) {
+	mock := defaultMock()
+	mock.infoFn = func(jobID string, q *nomadapi.QueryOptions) (*nomadapi.Job, *nomadapi.QueryMeta, error) {
+		return nil, nil, fmt.Errorf("404: not found")
+	}
+
+	reg := prometheus.NewRegistry()
+	d := newTestDifferWithRegistry(mock, reg)
+
+	if err := d.Check(map[string]string{"a.hcl": `job "test-job" {}`}, "abc"); err != nil {
+		t.Fatalf("first check: %v", err)
+	}
+	firstTimestamp := gatherJobDriftSince(t, reg, "test-job", "missing_from_nomad")
+	if firstTimestamp == 0 {
+		t.Fatal("expected job_drift_first_seen_timestamp_seconds to be set after first check")
+	}
+
+	// Second check: drift still present — timestamp must not change.
+	if err := d.Check(map[string]string{"a.hcl": `job "test-job" {}`}, "def"); err != nil {
+		t.Fatalf("second check: %v", err)
+	}
+	secondTimestamp := gatherJobDriftSince(t, reg, "test-job", "missing_from_nomad")
+	if secondTimestamp != firstTimestamp {
+		t.Errorf("first-seen timestamp changed between checks: %v → %v", firstTimestamp, secondTimestamp)
+	}
+}
+
+// TestDiffer_DriftFirstSeen_ClearedOnResolve verifies that the first-seen
+// timestamp metric is removed once drift is resolved.
+func TestDiffer_DriftFirstSeen_ClearedOnResolve(t *testing.T) {
+	mock := defaultMock()
+	// First check: job is missing.
+	mock.infoFn = func(jobID string, q *nomadapi.QueryOptions) (*nomadapi.Job, *nomadapi.QueryMeta, error) {
+		return nil, nil, fmt.Errorf("404: not found")
+	}
+
+	reg := prometheus.NewRegistry()
+	d := newTestDifferWithRegistry(mock, reg)
+
+	if err := d.Check(map[string]string{"a.hcl": `job "test-job" {}`}, "abc"); err != nil {
+		t.Fatalf("first check: %v", err)
+	}
+	if ts := gatherJobDriftSince(t, reg, "test-job", "missing_from_nomad"); ts == 0 {
+		t.Fatal("expected first-seen timestamp after first check")
+	}
+
+	// Second check: job now exists and matches — no drift.
+	mock.infoFn = func(jobID string, q *nomadapi.QueryOptions) (*nomadapi.Job, *nomadapi.QueryMeta, error) {
+		return &nomadapi.Job{ID: strPtr(jobID)}, nil, nil
+	}
+	if err := d.Check(map[string]string{"a.hcl": `job "test-job" {}`}, "def"); err != nil {
+		t.Fatalf("second check: %v", err)
+	}
+	if ts := gatherJobDriftSince(t, reg, "test-job", "missing_from_nomad"); ts != 0 {
+		t.Errorf("expected first-seen timestamp to be cleared after drift resolved, got %v", ts)
+	}
+}
+
+// gatherJobDriftSince returns the value of
+// nomad_botherer_job_drift_first_seen_timestamp_seconds for the given job and
+// diff_type, or 0 if the metric is absent.
+func gatherJobDriftSince(t *testing.T, reg prometheus.Gatherer, job, diffType string) float64 {
+	t.Helper()
+	mfs, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+	for _, mf := range mfs {
+		if mf.GetName() != "nomad_botherer_job_drift_first_seen_timestamp_seconds" {
+			continue
+		}
+		for _, m := range mf.GetMetric() {
+			labels := map[string]string{}
+			for _, lp := range m.GetLabel() {
+				labels[lp.GetName()] = lp.GetValue()
+			}
+			if labels["job"] == job && labels["diff_type"] == diffType {
+				return m.GetGauge().GetValue()
+			}
+		}
+	}
+	return 0
 }
 
 // TestDiffer_DeadJobInNomad_NoHCL_IncludeDeadJobs verifies that with

@@ -182,6 +182,8 @@ Standard Prometheus endpoint. Key metrics:
 | Metric | Type | Labels | Description |
 |--------|------|--------|-------------|
 | `nomad_botherer_job_diffs` | Gauge | `job`, `diff_type` | 1 for each active drift entry |
+| `nomad_botherer_drifted_jobs` | Gauge | `diff_type` | Count of jobs currently in each drift state |
+| `nomad_botherer_job_drift_first_seen_timestamp_seconds` | Gauge | `job`, `diff_type` | Unix time when drift was first detected; cleared on resolution. Use `time()-metric` for time-in-drift. |
 | `nomad_botherer_last_check_timestamp_seconds` | Gauge | — | Unix time of last diff check |
 | `nomad_botherer_diff_checks_total` | Counter | — | Total diff checks run |
 | `nomad_botherer_nomad_api_errors_total` | Counter | `op` (`info`, `plan`, `list`) | Nomad API errors by operation |
@@ -200,13 +202,20 @@ groups:
   - name: nomad-botherer
     rules:
       - alert: NomadJobDrift
-        expr: sum(nomad_botherer_job_diffs) > 0
+        expr: sum(nomad_botherer_drifted_jobs) > 0
         for: 5m
         labels:
           severity: warning
         annotations:
           summary: "Nomad job definitions have drifted from git"
           description: "{{ $value }} job(s) differ between the git repo and the running cluster."
+
+      - alert: NomadJobDriftPersistent
+        expr: time() - nomad_botherer_job_drift_first_seen_timestamp_seconds > 3600
+        labels:
+          severity: critical
+        annotations:
+          summary: "Nomad job {{ $labels.job }} has been in {{ $labels.diff_type }} drift for over 1h"
 
       - alert: NomadBothererStale
         expr: time() - nomad_botherer_last_check_timestamp_seconds > 300
