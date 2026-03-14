@@ -65,10 +65,11 @@ type Differ struct {
 	namespace       string
 	includeDeadJobs bool
 
-	mu            sync.RWMutex
-	diffs         []JobDiff
-	lastCheckTime time.Time
-	lastCommit    string
+	mu             sync.RWMutex
+	diffs          []JobDiff
+	lastCheckTime  time.Time
+	lastCommit     string
+	driftFirstSeen map[string]time.Time // key: driftKey(jobID, diffType); protected by mu
 
 	hclParseErrors  prometheus.Counter
 	hclFilesSkipped prometheus.Counter
@@ -76,6 +77,8 @@ type Differ struct {
 	nomadAPIErrors  *prometheus.CounterVec
 	lastCheck       prometheus.Gauge
 	jobDiffs        *prometheus.GaugeVec
+	driftedJobs     *prometheus.GaugeVec
+	jobDriftSince   *prometheus.GaugeVec
 }
 
 // newDifferBase constructs a Differ with metrics registered into reg.
@@ -85,6 +88,7 @@ func newDifferBase(jobs NomadJobsClient, namespace string, includeDeadJobs bool,
 		jobs:            jobs,
 		namespace:       namespace,
 		includeDeadJobs: includeDeadJobs,
+		driftFirstSeen:  make(map[string]time.Time),
 		hclParseErrors: f.NewCounter(prometheus.CounterOpts{
 			Name: "nomad_botherer_hcl_parse_errors_total",
 			Help: "Total number of HCL files that failed to parse as Nomad job definitions.",
@@ -109,6 +113,14 @@ func newDifferBase(jobs NomadJobsClient, namespace string, includeDeadJobs bool,
 			Name: "nomad_botherer_job_diffs",
 			Help: "1 for each job/diff-type combination currently detected.",
 		}, []string{"job", "diff_type"}),
+		driftedJobs: f.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "nomad_botherer_drifted_jobs",
+			Help: "Number of jobs currently in each drift state.",
+		}, []string{"diff_type"}),
+		jobDriftSince: f.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "nomad_botherer_job_drift_first_seen_timestamp_seconds",
+			Help: "Unix timestamp when drift was first detected for each job. Cleared when drift resolves. Use time()-metric to get seconds in drift state.",
+		}, []string{"job", "diff_type"}),
 	}
 }
 
@@ -131,6 +143,12 @@ func NewDiffer(cfg *config.Config) (*Differ, error) {
 // NewWithClient creates a Differ with a custom jobs client, intended for tests.
 func NewWithClient(cfg *config.Config, jobs NomadJobsClient) *Differ {
 	return newDifferBase(jobs, cfg.NomadNamespace, cfg.IncludeDeadJobs, prometheus.NewRegistry())
+}
+
+// NewWithClientAndRegistry creates a Differ with a custom jobs client and Prometheus
+// registry. Use this in tests that need to inspect metric values.
+func NewWithClientAndRegistry(cfg *config.Config, jobs NomadJobsClient, reg prometheus.Registerer) *Differ {
+	return newDifferBase(jobs, cfg.NomadNamespace, cfg.IncludeDeadJobs, reg)
 }
 
 // Check compares the given HCL files (path → content) against the live Nomad
@@ -246,20 +264,63 @@ func (d *Differ) Check(hclFiles map[string]string, commit string) error {
 	}
 
 	now := time.Now()
+
+	// Build the set of currently-drifting job+type keys.
+	currentKeys := make(map[string]struct{}, len(diffs))
+	for _, diff := range diffs {
+		currentKeys[driftKey(diff.JobID, string(diff.DiffType))] = struct{}{}
+	}
+
 	d.mu.Lock()
 	d.diffs = diffs
 	d.lastCheckTime = now
 	d.lastCommit = commit
+
+	// Remove entries that are no longer drifting.
+	for k := range d.driftFirstSeen {
+		if _, ok := currentKeys[k]; !ok {
+			delete(d.driftFirstSeen, k)
+		}
+	}
+	// Record the first time each new drift is observed.
+	for k := range currentKeys {
+		if _, ok := d.driftFirstSeen[k]; !ok {
+			d.driftFirstSeen[k] = now
+		}
+	}
+	// Snapshot first-seen times for metric updates below (outside the lock).
+	firstSeenSnapshot := make(map[string]time.Time, len(d.driftFirstSeen))
+	for k, v := range d.driftFirstSeen {
+		firstSeenSnapshot[k] = v
+	}
 	d.mu.Unlock()
 
 	d.lastCheck.Set(float64(now.Unix()))
 	d.jobDiffs.Reset()
+	d.driftedJobs.Reset()
+	d.jobDriftSince.Reset()
+	typeCounts := make(map[string]int)
 	for _, diff := range diffs {
 		d.jobDiffs.WithLabelValues(diff.JobID, string(diff.DiffType)).Set(1)
+		typeCounts[string(diff.DiffType)]++
+	}
+	for typ, count := range typeCounts {
+		d.driftedJobs.WithLabelValues(typ).Set(float64(count))
+	}
+	for _, diff := range diffs {
+		k := driftKey(diff.JobID, string(diff.DiffType))
+		if t, ok := firstSeenSnapshot[k]; ok {
+			d.jobDriftSince.WithLabelValues(diff.JobID, string(diff.DiffType)).Set(float64(t.Unix()))
+		}
 	}
 
 	slog.Info("Diff check complete", "diffs", len(diffs), "commit", commit)
 	return nil
+}
+
+// driftKey returns a map key for a (jobID, diffType) pair.
+func driftKey(jobID, diffType string) string {
+	return jobID + "\x00" + diffType
 }
 
 // Diffs returns a snapshot of the latest diffs, the time they were computed,
