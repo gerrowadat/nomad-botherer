@@ -23,6 +23,9 @@ Three kinds of drift are tracked:
 - [Configuration](#configuration)
 - [Webhooks](#webhooks)
 - [Monitoring](#monitoring)
+  - [`/healthz`](#healthz)
+  - [`/metrics`](#metrics)
+  - [Sample Prometheus configuration](#sample-prometheus-configuration)
 - [Docker](#docker)
 - [Development](#development)
 
@@ -177,54 +180,78 @@ Always returns **HTTP 200**. The JSON body describes the current drift state:
 
 ### `/metrics`
 
-Standard Prometheus endpoint. Key metrics:
+Standard Prometheus exposition endpoint. All metric names are prefixed with `nomad_botherer_`.
 
-| Metric | Type | Labels | Description |
-|--------|------|--------|-------------|
-| `nomad_botherer_job_diffs` | Gauge | `job`, `diff_type` | 1 for each active drift entry |
-| `nomad_botherer_drifted_jobs` | Gauge | `diff_type` | Count of jobs currently in each drift state |
-| `nomad_botherer_job_drift_first_seen_timestamp_seconds` | Gauge | `job`, `diff_type` | Unix time when drift was first detected; cleared on resolution. Use `time()-metric` for time-in-drift. |
-| `nomad_botherer_last_check_timestamp_seconds` | Gauge | — | Unix time of last diff check |
-| `nomad_botherer_diff_checks_total` | Counter | — | Total diff checks run |
-| `nomad_botherer_nomad_api_errors_total` | Counter | `op` (`info`, `plan`, `list`) | Nomad API errors by operation |
-| `nomad_botherer_hcl_parse_errors_total` | Counter | — | HCL files that failed to parse |
-| `nomad_botherer_hcl_non_job_files_skipped_total` | Counter | — | HCL files skipped (no job stanza) |
-| `nomad_botherer_git_fetches_total` | Counter | — | Total remote git fetch/clone attempts |
-| `nomad_botherer_git_fetch_errors_total` | Counter | — | Remote git fetch/clone failures |
-| `nomad_botherer_git_last_update_timestamp_seconds` | Gauge | — | Unix time of last successful git fetch |
-| `nomad_botherer_webhook_events_total` | Counter | `event` (`push`, `ping`, `unknown`, `error`) | Webhook events received |
-| `nomad_botherer_info` | Gauge | `version` | Build version info |
+#### Drift state
 
-**Example Prometheus alert:**
+These metrics describe the current relationship between the git repo and the live Nomad cluster. They are reset and recomputed on every diff check.
 
-```yaml
-groups:
-  - name: nomad-botherer
-    rules:
-      - alert: NomadJobDrift
-        expr: sum(nomad_botherer_drifted_jobs) > 0
-        for: 5m
-        labels:
-          severity: warning
-        annotations:
-          summary: "Nomad job definitions have drifted from git"
-          description: "{{ $value }} job(s) differ between the git repo and the running cluster."
+| Metric | Type | Labels | What it tells you |
+|--------|------|--------|-------------------|
+| `nomad_botherer_drifted_jobs` | Gauge | `diff_type` | Number of jobs currently in each drift state. The simplest signal for "is anything wrong?" — alert on `sum(nomad_botherer_drifted_jobs) > 0`. |
+| `nomad_botherer_job_diffs` | Gauge | `job`, `diff_type` | 1 for every (job, diff_type) pair currently detected. Useful for per-job dashboards or filtering by job name. |
+| `nomad_botherer_job_drift_first_seen_timestamp_seconds` | Gauge | `job`, `diff_type` | Unix timestamp of when drift was first detected for this job. Absent when no drift is present. `time() - metric` gives how long the job has been drifting — use this to distinguish a deploy in progress from a job that's been stuck for hours. |
 
-      - alert: NomadJobDriftPersistent
-        expr: time() - nomad_botherer_job_drift_first_seen_timestamp_seconds > 3600
-        labels:
-          severity: critical
-        annotations:
-          summary: "Nomad job {{ $labels.job }} has been in {{ $labels.diff_type }} drift for over 1h"
+#### Diff checks
 
-      - alert: NomadBothererStale
-        expr: time() - nomad_botherer_last_check_timestamp_seconds > 300
-        for: 2m
-        labels:
-          severity: warning
-        annotations:
-          summary: "nomad-botherer has not run a diff check recently"
-```
+These counters and timestamps describe the diff check loop itself — how often it runs and whether it is working correctly.
+
+| Metric | Type | Labels | What it tells you |
+|--------|------|--------|-------------------|
+| `nomad_botherer_diff_checks_total` | Counter | — | Total diff checks run since startup. Use `rate()` to confirm the loop is running at the expected frequency. |
+| `nomad_botherer_last_check_timestamp_seconds` | Gauge | — | Unix timestamp of the most recent completed diff check. Alert when `time() - metric` exceeds 2× `--diff-interval` to catch a stuck check loop. |
+| `nomad_botherer_nomad_api_errors_total` | Counter | `op` (`info`, `plan`, `list`) | Nomad API call failures by operation. `info` = job lookup, `plan` = drift plan, `list` = listing all jobs. A rising count means drift results may be incomplete for that operation. |
+| `nomad_botherer_hcl_parse_errors_total` | Counter | — | HCL files that failed to parse via the Nomad API. These files are skipped; the rest of the check continues. |
+| `nomad_botherer_hcl_non_job_files_skipped_total` | Counter | — | HCL files that were skipped because they contain no `job` stanza (e.g. ACL policies, volumes). Expected and normal; a rising rate may indicate `--hcl-dir` is set too broadly. |
+
+#### Git tracking
+
+These metrics describe the in-memory git clone and polling loop.
+
+| Metric | Type | Labels | What it tells you |
+|--------|------|--------|-------------------|
+| `nomad_botherer_git_fetches_total` | Counter | — | Total remote fetch/clone attempts. Each poll interval triggers one. |
+| `nomad_botherer_git_fetch_errors_total` | Counter | — | Fetch/clone attempts that failed. A rising count means new commits are not being picked up; diff checks continue against the last known commit. |
+| `nomad_botherer_git_last_update_timestamp_seconds` | Gauge | — | Unix timestamp of the last successful fetch. Alert when `time() - metric` is significantly larger than `--poll-interval` to catch a stuck git loop. |
+
+#### Webhooks
+
+These metrics describe incoming webhook events from GitHub.
+
+| Metric | Type | Labels | What it tells you |
+|--------|------|--------|-------------------|
+| `nomad_botherer_webhook_events_total` | Counter | `event` (`push`, `ping`, `unknown`, `error`) | Webhook events received by type. `push` events trigger an immediate fetch. `error` events indicate a failed delivery (bad signature, parse error, etc.). |
+| `nomad_botherer_last_webhook_success_timestamp_seconds` | Gauge | — | Unix timestamp of the last successfully processed webhook. Zero if no webhook has been received yet. |
+| `nomad_botherer_last_webhook_failure_timestamp_seconds` | Gauge | — | Unix timestamp of the last failed webhook delivery. Zero if no failure has occurred. |
+
+#### Service info
+
+| Metric | Type | Labels | What it tells you |
+|--------|------|--------|-------------------|
+| `nomad_botherer_info` | Gauge | `version` | Always 1. The `version` label holds the build version string. Useful for tracking rollouts: `count by(version)(nomad_botherer_info)`. |
+
+### Sample Prometheus configuration
+
+The [`monitoring/`](monitoring/) directory contains ready-to-use configuration files:
+
+| File | Contents |
+|------|----------|
+| [`monitoring/prometheus.yml`](monitoring/prometheus.yml) | Scrape configuration for nomad-botherer |
+| [`monitoring/recording_rules.yml`](monitoring/recording_rules.yml) | Pre-aggregated series for dashboards and alerts |
+| [`monitoring/alerts.yml`](monitoring/alerts.yml) | Alerting rules covering drift, service health, git, and webhooks |
+
+The alerts cover:
+
+- **NomadJobDrift** — any drift detected for more than 5 minutes
+- **NomadJobModifiedPersistent** — a job's config has diverged from git for over 1 hour
+- **NomadJobMissingFromNomad** — a git-defined job has been absent from Nomad for over 15 minutes
+- **NomadJobMissingFromHCL** — a running Nomad job has no HCL file in the repo for over 1 hour
+- **NomadBothererCheckStale** — no diff check has completed in over 5 minutes
+- **NomadBothererGitFetchFailing** — git fetches have been failing for 10 minutes
+- **NomadBothererGitStale** — the in-memory git clone has not refreshed in over 30 minutes
+- **NomadBothererAPIErrors** — Nomad API calls are failing
+- **NomadBothererDown** — Prometheus cannot reach the `/metrics` endpoint
+- **NomadBothererWebhookErrors** — webhook deliveries are consistently failing
 
 ---
 

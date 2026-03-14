@@ -1,0 +1,33 @@
+# Example Prometheus configuration for scraping nomad-botherer.
+#
+# Adjust the target address and labels to match your environment.
+# If you run multiple nomad-botherer instances (e.g. one per Nomad cluster),
+# add each as a separate static_configs entry with a distinguishing label.
+
+global:
+  scrape_interval: 30s
+  evaluation_interval: 30s
+
+rule_files:
+  - recording_rules.yml
+  - alerts.yml
+
+scrape_configs:
+  - job_name: nomad-botherer
+
+    static_configs:
+      - targets:
+          - localhost:8080
+        labels:
+          # Add any extra labels that help identify which cluster or
+          # environment this instance is watching.
+          cluster: default
+
+    # nomad-botherer's /metrics endpoint is at the default path.
+    # Uncomment if you run it on a non-default path.
+    # metrics_path: /metrics
+
+    # If nomad-botherer is behind TLS termination:
+    # scheme: https
+    # tls_config:
+    #   ca_file: /etc/prometheus/ca.crt
