@@ -14,6 +14,9 @@ service NomadBotherer {
 
   // TriggerRefresh causes an immediate git pull and diff check.
   rpc TriggerRefresh(TriggerRefreshRequest) returns (TriggerRefreshResponse);
+
+  // GetVersion returns the server build version, commit hash, and build date.
+  rpc GetVersion(GetVersionRequest) returns (GetVersionResponse);
 }
 
 message GetDiffsRequest {}
@@ -48,4 +51,15 @@ message TriggerRefreshRequest {}
 
 message TriggerRefreshResponse {
   string message = 1;
+}
+
+message GetVersionRequest {}
+
+message GetVersionResponse {
+  // Semver tag or "dev" when built without -ldflags.
+  string version = 1;
+  // Git commit hash at build time, or "unknown".
+  string commit = 2;
+  // RFC3339 build timestamp, or "unknown".
+  string build_date = 3;
 }

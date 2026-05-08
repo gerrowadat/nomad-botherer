@@ -103,7 +103,11 @@ func main() {
 			slog.Error("grpc-listen-addr is set but grpc-api-key is empty; refusing to start an unauthenticated gRPC server")
 			os.Exit(1)
 		}
-		grpcSrv := grpcserver.New(cfg.GRPCAPIKey, differ, watcher)
+		grpcSrv := grpcserver.New(cfg.GRPCAPIKey, differ, watcher, grpcserver.BuildInfo{
+				Version:   version,
+				Commit:    commit,
+				BuildDate: buildDate,
+			})
 		go func() {
 			if err := grpcSrv.Run(ctx, cfg.GRPCListenAddr); err != nil {
 				slog.Error("gRPC server error", "err", err)

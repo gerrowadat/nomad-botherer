@@ -183,6 +183,7 @@ already-reachable port; it is not a substitute for transport security.
 | `GetDiffs` | `GetDiffsRequest` | `GetDiffsResponse` | Returns all currently-detected job diffs, plus the last check time and git commit |
 | `GetStatus` | `GetStatusRequest` | `GetStatusResponse` | Returns git watcher status: last commit hash and last successful fetch time |
 | `TriggerRefresh` | `TriggerRefreshRequest` | `TriggerRefreshResponse` | Triggers an immediate git pull and diff check (same effect as a webhook push event) |
+| `GetVersion` | `GetVersionRequest` | `GetVersionResponse` | Returns the server's version string, git commit hash, and build date (as set by `-ldflags` at build time; defaults to `dev` / `unknown`) |
 
 ### CLI examples
 
@@ -261,6 +262,25 @@ grpcurl -plaintext \
   "message": "refresh triggered"
 }
 ```
+
+**Get server version:**
+
+```bash
+grpcurl -plaintext \
+  -proto proto/nomad_botherer.proto \
+  -H 'authorization: Bearer your-api-key' \
+  localhost:9090 nomad_botherer.v1.NomadBotherer/GetVersion
+```
+
+```json
+{
+  "version": "v1.2.3",
+  "commit": "abc1234def5678",
+  "buildDate": "2026-05-08T10:00:00Z"
+}
+```
+
+Binaries built without `-ldflags` return `"version": "dev"`, `"commit": "unknown"`, `"buildDate": "unknown"`.
 
 **Calling from a different host** (e.g. from a workstation against a remote deployment):
 

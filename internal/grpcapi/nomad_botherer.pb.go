@@ -359,6 +359,105 @@ func (x *TriggerRefreshResponse) GetMessage() string {
 	return ""
 }
 
+type GetVersionRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetVersionRequest) Reset() {
+	*x = GetVersionRequest{}
+	mi := &file_nomad_botherer_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetVersionRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetVersionRequest) ProtoMessage() {}
+
+func (x *GetVersionRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_nomad_botherer_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetVersionRequest.ProtoReflect.Descriptor instead.
+func (*GetVersionRequest) Descriptor() ([]byte, []int) {
+	return file_nomad_botherer_proto_rawDescGZIP(), []int{7}
+}
+
+type GetVersionResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Semver tag or "dev" when built without -ldflags.
+	Version string `protobuf:"bytes,1,opt,name=version,proto3" json:"version,omitempty"`
+	// Git commit hash at build time, or "unknown".
+	Commit string `protobuf:"bytes,2,opt,name=commit,proto3" json:"commit,omitempty"`
+	// RFC3339 build timestamp, or "unknown".
+	BuildDate     string `protobuf:"bytes,3,opt,name=build_date,json=buildDate,proto3" json:"build_date,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetVersionResponse) Reset() {
+	*x = GetVersionResponse{}
+	mi := &file_nomad_botherer_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetVersionResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetVersionResponse) ProtoMessage() {}
+
+func (x *GetVersionResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_nomad_botherer_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetVersionResponse.ProtoReflect.Descriptor instead.
+func (*GetVersionResponse) Descriptor() ([]byte, []int) {
+	return file_nomad_botherer_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *GetVersionResponse) GetVersion() string {
+	if x != nil {
+		return x.Version
+	}
+	return ""
+}
+
+func (x *GetVersionResponse) GetCommit() string {
+	if x != nil {
+		return x.Commit
+	}
+	return ""
+}
+
+func (x *GetVersionResponse) GetBuildDate() string {
+	if x != nil {
+		return x.BuildDate
+	}
+	return ""
+}
+
 var File_nomad_botherer_proto protoreflect.FileDescriptor
 
 const file_nomad_botherer_proto_rawDesc = "" +
@@ -382,11 +481,19 @@ const file_nomad_botherer_proto_rawDesc = "" +
 	"\x10last_update_time\x18\x02 \x01(\tR\x0elastUpdateTime\"\x17\n" +
 	"\x15TriggerRefreshRequest\"2\n" +
 	"\x16TriggerRefreshResponse\x12\x18\n" +
-	"\amessage\x18\x01 \x01(\tR\amessage2\xa3\x02\n" +
+	"\amessage\x18\x01 \x01(\tR\amessage\"\x13\n" +
+	"\x11GetVersionRequest\"e\n" +
+	"\x12GetVersionResponse\x12\x18\n" +
+	"\aversion\x18\x01 \x01(\tR\aversion\x12\x16\n" +
+	"\x06commit\x18\x02 \x01(\tR\x06commit\x12\x1d\n" +
+	"\n" +
+	"build_date\x18\x03 \x01(\tR\tbuildDate2\xfe\x02\n" +
 	"\rNomadBotherer\x12S\n" +
 	"\bGetDiffs\x12\".nomad_botherer.v1.GetDiffsRequest\x1a#.nomad_botherer.v1.GetDiffsResponse\x12V\n" +
 	"\tGetStatus\x12#.nomad_botherer.v1.GetStatusRequest\x1a$.nomad_botherer.v1.GetStatusResponse\x12e\n" +
-	"\x0eTriggerRefresh\x12(.nomad_botherer.v1.TriggerRefreshRequest\x1a).nomad_botherer.v1.TriggerRefreshResponseB7Z5github.com/gerrowadat/nomad-botherer/internal/grpcapib\x06proto3"
+	"\x0eTriggerRefresh\x12(.nomad_botherer.v1.TriggerRefreshRequest\x1a).nomad_botherer.v1.TriggerRefreshResponse\x12Y\n" +
+	"\n" +
+	"GetVersion\x12$.nomad_botherer.v1.GetVersionRequest\x1a%.nomad_botherer.v1.GetVersionResponseB7Z5github.com/gerrowadat/nomad-botherer/internal/grpcapib\x06proto3"
 
 var (
 	file_nomad_botherer_proto_rawDescOnce sync.Once
@@ -400,7 +507,7 @@ func file_nomad_botherer_proto_rawDescGZIP() []byte {
 	return file_nomad_botherer_proto_rawDescData
 }
 
-var file_nomad_botherer_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
+var file_nomad_botherer_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
 var file_nomad_botherer_proto_goTypes = []any{
 	(*GetDiffsRequest)(nil),        // 0: nomad_botherer.v1.GetDiffsRequest
 	(*GetDiffsResponse)(nil),       // 1: nomad_botherer.v1.GetDiffsResponse
@@ -409,17 +516,21 @@ var file_nomad_botherer_proto_goTypes = []any{
 	(*GetStatusResponse)(nil),      // 4: nomad_botherer.v1.GetStatusResponse
 	(*TriggerRefreshRequest)(nil),  // 5: nomad_botherer.v1.TriggerRefreshRequest
 	(*TriggerRefreshResponse)(nil), // 6: nomad_botherer.v1.TriggerRefreshResponse
+	(*GetVersionRequest)(nil),      // 7: nomad_botherer.v1.GetVersionRequest
+	(*GetVersionResponse)(nil),     // 8: nomad_botherer.v1.GetVersionResponse
 }
 var file_nomad_botherer_proto_depIdxs = []int32{
 	2, // 0: nomad_botherer.v1.GetDiffsResponse.diffs:type_name -> nomad_botherer.v1.JobDiff
 	0, // 1: nomad_botherer.v1.NomadBotherer.GetDiffs:input_type -> nomad_botherer.v1.GetDiffsRequest
 	3, // 2: nomad_botherer.v1.NomadBotherer.GetStatus:input_type -> nomad_botherer.v1.GetStatusRequest
 	5, // 3: nomad_botherer.v1.NomadBotherer.TriggerRefresh:input_type -> nomad_botherer.v1.TriggerRefreshRequest
-	1, // 4: nomad_botherer.v1.NomadBotherer.GetDiffs:output_type -> nomad_botherer.v1.GetDiffsResponse
-	4, // 5: nomad_botherer.v1.NomadBotherer.GetStatus:output_type -> nomad_botherer.v1.GetStatusResponse
-	6, // 6: nomad_botherer.v1.NomadBotherer.TriggerRefresh:output_type -> nomad_botherer.v1.TriggerRefreshResponse
-	4, // [4:7] is the sub-list for method output_type
-	1, // [1:4] is the sub-list for method input_type
+	7, // 4: nomad_botherer.v1.NomadBotherer.GetVersion:input_type -> nomad_botherer.v1.GetVersionRequest
+	1, // 5: nomad_botherer.v1.NomadBotherer.GetDiffs:output_type -> nomad_botherer.v1.GetDiffsResponse
+	4, // 6: nomad_botherer.v1.NomadBotherer.GetStatus:output_type -> nomad_botherer.v1.GetStatusResponse
+	6, // 7: nomad_botherer.v1.NomadBotherer.TriggerRefresh:output_type -> nomad_botherer.v1.TriggerRefreshResponse
+	8, // 8: nomad_botherer.v1.NomadBotherer.GetVersion:output_type -> nomad_botherer.v1.GetVersionResponse
+	5, // [5:9] is the sub-list for method output_type
+	1, // [1:5] is the sub-list for method input_type
 	1, // [1:1] is the sub-list for extension type_name
 	1, // [1:1] is the sub-list for extension extendee
 	0, // [0:1] is the sub-list for field type_name
@@ -436,7 +547,7 @@ func file_nomad_botherer_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_nomad_botherer_proto_rawDesc), len(file_nomad_botherer_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   7,
+			NumMessages:   9,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

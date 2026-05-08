@@ -46,13 +46,19 @@ func (m *mockGitSource) Status() (string, time.Time) {
 	return m.lastCommit, m.lastUpdate
 }
 
+var testBuildInfo = grpcserver.BuildInfo{
+	Version:   "v1.2.3",
+	Commit:    "abc123",
+	BuildDate: "2026-05-08T00:00:00Z",
+}
+
 // startTestServer starts a real gRPC listener on a random port and returns
 // a connected client and a cancel function that stops the server.
 func startTestServer(t *testing.T, diffSrc grpcserver.DiffSource, gitSrc grpcserver.GitStatusSource) (grpcapi.NomadBothererClient, func()) {
 	t.Helper()
 
 	reg := prometheus.NewRegistry()
-	srv := grpcserver.NewWithRegistry(testAPIKey, diffSrc, gitSrc, reg)
+	srv := grpcserver.NewWithRegistry(testAPIKey, diffSrc, gitSrc, testBuildInfo, reg)
 
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -262,13 +268,73 @@ func TestTriggerRefresh(t *testing.T) {
 	}
 }
 
+// --- GetVersion tests ---
+
+func TestGetVersion(t *testing.T) {
+	diffSrc := &mockDiffSource{}
+	gitSrc := &mockGitSource{}
+	client, stop := startTestServer(t, diffSrc, gitSrc)
+	defer stop()
+
+	resp, err := client.GetVersion(authCtx(testAPIKey), &grpcapi.GetVersionRequest{})
+	if err != nil {
+		t.Fatalf("GetVersion: %v", err)
+	}
+	if resp.Version != testBuildInfo.Version {
+		t.Errorf("want version %q, got %q", testBuildInfo.Version, resp.Version)
+	}
+	if resp.Commit != testBuildInfo.Commit {
+		t.Errorf("want commit %q, got %q", testBuildInfo.Commit, resp.Commit)
+	}
+	if resp.BuildDate != testBuildInfo.BuildDate {
+		t.Errorf("want build_date %q, got %q", testBuildInfo.BuildDate, resp.BuildDate)
+	}
+}
+
+func TestGetVersion_DevBuild(t *testing.T) {
+	diffSrc := &mockDiffSource{}
+	gitSrc := &mockGitSource{}
+	reg := prometheus.NewRegistry()
+	srv := grpcserver.NewWithRegistry(testAPIKey, diffSrc, gitSrc, grpcserver.BuildInfo{
+		Version:   "dev",
+		Commit:    "unknown",
+		BuildDate: "unknown",
+	}, reg)
+
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	grpcSrv := srv.GRPCServer()
+	go func() { _ = grpcSrv.Serve(lis) }()
+	defer grpcSrv.GracefulStop()
+
+	conn, err := grpc.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+	client := grpcapi.NewNomadBothererClient(conn)
+
+	resp, err := client.GetVersion(authCtx(testAPIKey), &grpcapi.GetVersionRequest{})
+	if err != nil {
+		t.Fatalf("GetVersion: %v", err)
+	}
+	if resp.Version != "dev" {
+		t.Errorf("want version dev, got %q", resp.Version)
+	}
+	if resp.Commit != "unknown" {
+		t.Errorf("want commit unknown, got %q", resp.Commit)
+	}
+}
+
 // --- Metrics tests ---
 
 func TestMetrics_AuthErrorCounted(t *testing.T) {
 	diffSrc := &mockDiffSource{}
 	gitSrc := &mockGitSource{}
 	reg := prometheus.NewRegistry()
-	srv := grpcserver.NewWithRegistry(testAPIKey, diffSrc, gitSrc, reg)
+	srv := grpcserver.NewWithRegistry(testAPIKey, diffSrc, gitSrc, testBuildInfo, reg)
 
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -311,7 +377,7 @@ func TestMetrics_SuccessfulRequestCounted(t *testing.T) {
 	diffSrc := &mockDiffSource{}
 	gitSrc := &mockGitSource{}
 	reg := prometheus.NewRegistry()
-	srv := grpcserver.NewWithRegistry(testAPIKey, diffSrc, gitSrc, reg)
+	srv := grpcserver.NewWithRegistry(testAPIKey, diffSrc, gitSrc, testBuildInfo, reg)
 
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

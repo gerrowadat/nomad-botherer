@@ -22,6 +22,7 @@ const (
 	NomadBotherer_GetDiffs_FullMethodName       = "/nomad_botherer.v1.NomadBotherer/GetDiffs"
 	NomadBotherer_GetStatus_FullMethodName      = "/nomad_botherer.v1.NomadBotherer/GetStatus"
 	NomadBotherer_TriggerRefresh_FullMethodName = "/nomad_botherer.v1.NomadBotherer/TriggerRefresh"
+	NomadBotherer_GetVersion_FullMethodName     = "/nomad_botherer.v1.NomadBotherer/GetVersion"
 )
 
 // NomadBothererClient is the client API for NomadBotherer service.
@@ -36,6 +37,8 @@ type NomadBothererClient interface {
 	GetStatus(ctx context.Context, in *GetStatusRequest, opts ...grpc.CallOption) (*GetStatusResponse, error)
 	// TriggerRefresh causes an immediate git pull and diff check.
 	TriggerRefresh(ctx context.Context, in *TriggerRefreshRequest, opts ...grpc.CallOption) (*TriggerRefreshResponse, error)
+	// GetVersion returns the server build version, commit hash, and build date.
+	GetVersion(ctx context.Context, in *GetVersionRequest, opts ...grpc.CallOption) (*GetVersionResponse, error)
 }
 
 type nomadBothererClient struct {
@@ -76,6 +79,16 @@ func (c *nomadBothererClient) TriggerRefresh(ctx context.Context, in *TriggerRef
 	return out, nil
 }
 
+func (c *nomadBothererClient) GetVersion(ctx context.Context, in *GetVersionRequest, opts ...grpc.CallOption) (*GetVersionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetVersionResponse)
+	err := c.cc.Invoke(ctx, NomadBotherer_GetVersion_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // NomadBothererServer is the server API for NomadBotherer service.
 // All implementations must embed UnimplementedNomadBothererServer
 // for forward compatibility.
@@ -88,6 +101,8 @@ type NomadBothererServer interface {
 	GetStatus(context.Context, *GetStatusRequest) (*GetStatusResponse, error)
 	// TriggerRefresh causes an immediate git pull and diff check.
 	TriggerRefresh(context.Context, *TriggerRefreshRequest) (*TriggerRefreshResponse, error)
+	// GetVersion returns the server build version, commit hash, and build date.
+	GetVersion(context.Context, *GetVersionRequest) (*GetVersionResponse, error)
 	mustEmbedUnimplementedNomadBothererServer()
 }
 
@@ -106,6 +121,9 @@ func (UnimplementedNomadBothererServer) GetStatus(context.Context, *GetStatusReq
 }
 func (UnimplementedNomadBothererServer) TriggerRefresh(context.Context, *TriggerRefreshRequest) (*TriggerRefreshResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method TriggerRefresh not implemented")
+}
+func (UnimplementedNomadBothererServer) GetVersion(context.Context, *GetVersionRequest) (*GetVersionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetVersion not implemented")
 }
 func (UnimplementedNomadBothererServer) mustEmbedUnimplementedNomadBothererServer() {}
 func (UnimplementedNomadBothererServer) testEmbeddedByValue()                       {}
@@ -182,6 +200,24 @@ func _NomadBotherer_TriggerRefresh_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _NomadBotherer_GetVersion_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetVersionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NomadBothererServer).GetVersion(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NomadBotherer_GetVersion_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NomadBothererServer).GetVersion(ctx, req.(*GetVersionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // NomadBotherer_ServiceDesc is the grpc.ServiceDesc for NomadBotherer service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -200,6 +236,10 @@ var NomadBotherer_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "TriggerRefresh",
 			Handler:    _NomadBotherer_TriggerRefresh_Handler,
+		},
+		{
+			MethodName: "GetVersion",
+			Handler:    _NomadBotherer_GetVersion_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

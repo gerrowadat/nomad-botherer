@@ -32,30 +32,39 @@ type GitStatusSource interface {
 	Status() (lastCommit string, lastUpdate time.Time)
 }
 
+// BuildInfo holds the version strings injected at link time.
+type BuildInfo struct {
+	Version   string
+	Commit    string
+	BuildDate string
+}
+
 // Server implements grpcapi.NomadBothererServer.
 type Server struct {
 	grpcapi.UnimplementedNomadBothererServer
 
-	apiKey string
-	diffs  DiffSource
-	git    GitStatusSource
+	apiKey    string
+	diffs     DiffSource
+	git       GitStatusSource
+	buildInfo BuildInfo
 
 	// Prometheus metrics
-	rpcTotal   *prometheus.CounterVec
-	rpcErrors  *prometheus.CounterVec
+	rpcTotal  *prometheus.CounterVec
+	rpcErrors *prometheus.CounterVec
 }
 
 // New creates a Server using the default Prometheus registry.
-func New(apiKey string, diffs DiffSource, git GitStatusSource) *Server {
-	return NewWithRegistry(apiKey, diffs, git, prometheus.DefaultRegisterer)
+func New(apiKey string, diffs DiffSource, git GitStatusSource, info BuildInfo) *Server {
+	return NewWithRegistry(apiKey, diffs, git, info, prometheus.DefaultRegisterer)
 }
 
 // NewWithRegistry creates a Server with a custom Prometheus Registerer.
-func NewWithRegistry(apiKey string, diffs DiffSource, git GitStatusSource, reg prometheus.Registerer) *Server {
+func NewWithRegistry(apiKey string, diffs DiffSource, git GitStatusSource, info BuildInfo, reg prometheus.Registerer) *Server {
 	return &Server{
-		apiKey: apiKey,
-		diffs:  diffs,
-		git:    git,
+		apiKey:    apiKey,
+		diffs:     diffs,
+		git:       git,
+		buildInfo: info,
 		rpcTotal: promauto.With(reg).NewCounterVec(prometheus.CounterOpts{
 			Name: "nomad_botherer_grpc_requests_total",
 			Help: "Total number of gRPC requests, by method and status code.",
@@ -167,4 +176,13 @@ func (s *Server) GetStatus(_ context.Context, _ *grpcapi.GetStatusRequest) (*grp
 func (s *Server) TriggerRefresh(_ context.Context, _ *grpcapi.TriggerRefreshRequest) (*grpcapi.TriggerRefreshResponse, error) {
 	s.git.Trigger()
 	return &grpcapi.TriggerRefreshResponse{Message: "refresh triggered"}, nil
+}
+
+// GetVersion returns the build version, commit, and build date.
+func (s *Server) GetVersion(_ context.Context, _ *grpcapi.GetVersionRequest) (*grpcapi.GetVersionResponse, error) {
+	return &grpcapi.GetVersionResponse{
+		Version:   s.buildInfo.Version,
+		Commit:    s.buildInfo.Commit,
+		BuildDate: s.buildInfo.BuildDate,
+	}, nil
 }
