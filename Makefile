@@ -1,6 +1,8 @@
 BINARY     := nomad-botherer
+CTL_BINARY := nbctl
 MODULE     := github.com/gerrowadat/nomad-botherer
 CMD        := ./cmd/nomad-botherer
+CTL_CMD    := ./cmd/nbctl
 
 # Version is derived from the most recent git tag; falls back to "dev".
 VERSION    ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
@@ -12,16 +14,36 @@ LDFLAGS    := -X main.version=$(VERSION) \
               -X main.buildDate=$(BUILDDATE) \
               -s -w
 
+CTL_LDFLAGS := -X main.version=$(VERSION) -s -w
+
 IMAGE      ?= ghcr.io/gerrowadat/$(BINARY)
 PLATFORMS  := linux/amd64,linux/arm64
 
-.PHONY: all build test lint clean docker docker-push release-patch release-minor release-major version
+.PHONY: all build build-server build-ctl install install-server install-ctl test lint clean docker docker-push release-patch release-minor release-major version
 
 all: build
 
-## build: compile for the current platform
-build:
+## build: compile both binaries for the current platform
+build: build-server build-ctl
+
+## build-server: compile the nomad-botherer server
+build-server:
 	go build -ldflags "$(LDFLAGS)" -o $(BINARY) $(CMD)
+
+## build-ctl: compile the nbctl CLI
+build-ctl:
+	go build -ldflags "$(CTL_LDFLAGS)" -o $(CTL_BINARY) $(CTL_CMD)
+
+## install: install both binaries to $GOPATH/bin (or go install equivalent)
+install: install-server install-ctl
+
+## install-server: go install the server binary
+install-server:
+	go install -ldflags "$(LDFLAGS)" $(CMD)
+
+## install-ctl: go install the nbctl binary
+install-ctl:
+	go install -ldflags "$(CTL_LDFLAGS)" $(CTL_CMD)
 
 ## test: run all tests
 test:
@@ -38,7 +60,7 @@ lint:
 
 ## clean: remove build artefacts
 clean:
-	rm -f $(BINARY) coverage.out coverage.html
+	rm -f $(BINARY) $(CTL_BINARY) coverage.out coverage.html
 
 ## version: print the current version
 version:

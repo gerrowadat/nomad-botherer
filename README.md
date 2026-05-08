@@ -25,7 +25,8 @@ Three kinds of drift are tracked:
 - [gRPC API](#grpc-api)
   - [Authentication](#authentication)
   - [Available RPCs](#available-rpcs)
-  - [CLI examples](#cli-examples)
+  - [nbctl — operator CLI](#nbctl--operator-cli)
+  - [grpcurl examples](#grpcurl-examples)
 - [Monitoring](#monitoring)
   - [`/healthz`](#healthz)
   - [`/metrics`](#metrics)
@@ -185,7 +186,120 @@ already-reachable port; it is not a substitute for transport security.
 | `TriggerRefresh` | `TriggerRefreshRequest` | `TriggerRefreshResponse` | Triggers an immediate git pull and diff check (same effect as a webhook push event) |
 | `GetVersion` | `GetVersionRequest` | `GetVersionResponse` | Returns the server's version string, git commit hash, and build date (as set by `-ldflags` at build time; defaults to `dev` / `unknown`) |
 
-### CLI examples
+### nbctl — operator CLI
+
+`nbctl` is the purpose-built CLI for the gRPC API. It can be installed independently without cloning the repo:
+
+```bash
+go install github.com/gerrowadat/nomad-botherer/cmd/nbctl@latest
+```
+
+Or built locally alongside the server:
+
+```bash
+make build-ctl   # produces ./nbctl
+make build       # produces both ./nomad-botherer and ./nbctl
+```
+
+#### Configuration
+
+| Flag | Env var | Default | Description |
+|------|---------|---------|-------------|
+| `--server` / `-s` | `NBCTL_SERVER` | `localhost:9090` | gRPC server address |
+| `--api-key` / `-k` | `NBCTL_API_KEY` | | API key (required) |
+| `--timeout` | | `10s` | Per-request timeout |
+| `--output` / `-o` | | `text` | Output format: `text` or `json` |
+| `--tls` | | `false` | Use TLS for the gRPC connection |
+
+The API key is most conveniently set via the environment so it does not appear in shell history:
+
+```bash
+export NBCTL_API_KEY=your-api-key
+export NBCTL_SERVER=nomad-botherer.internal:9090
+```
+
+#### Commands
+
+**Show current job diffs:**
+
+```bash
+nbctl diffs
+```
+
+```
+2 diff(s) detected
+last check:  2026-05-08T12:00:00Z
+last commit: abc1234def5678
+
+[modified] api-server (jobs/api-server.hcl)
+  Nomad plan shows diff type "Edited"
+
+[missing_from_hcl] legacy-worker
+```
+
+**Show git watcher status:**
+
+```bash
+nbctl status
+```
+
+```
+last commit:  abc1234def5678
+last updated: 2026-05-08T11:59:50Z
+```
+
+**Trigger an immediate refresh:**
+
+```bash
+nbctl refresh
+```
+
+```
+refresh triggered
+```
+
+**Show the server's build version:**
+
+```bash
+nbctl version
+```
+
+```
+version:    v1.2.3
+commit:     abc1234def5678
+build date: 2026-05-08T10:00:00Z
+```
+
+**JSON output** (all commands support `--output json` / `-o json`):
+
+```bash
+nbctl diffs -o json
+```
+
+```json
+{
+  "diffs": [
+    {
+      "job_id": "api-server",
+      "hcl_file": "jobs/api-server.hcl",
+      "diff_type": "modified",
+      "detail": "Nomad plan shows diff type \"Edited\""
+    }
+  ],
+  "last_check_time": "2026-05-08T12:00:00Z",
+  "last_commit": "abc1234def5678"
+}
+```
+
+**Connecting to a remote server with TLS:**
+
+```bash
+nbctl --server nomad-botherer.internal:9090 --tls diffs
+```
+
+**`nbctl --version`** prints the CLI's own build version (set at link time via `-ldflags`; independent of the server version returned by `nbctl version`).
+
+### grpcurl examples
 
 The examples below use [`grpcurl`](https://github.com/fullstackio/grpcurl), which can be installed with:
 
@@ -467,7 +581,10 @@ make build
 ### Build and test
 
 ```bash
-make build        # compile for the current platform
+make build        # compile both nomad-botherer and nbctl
+make build-server # compile just the server
+make build-ctl    # compile just nbctl
+make install      # go install both binaries to $GOPATH/bin
 make test         # go test -race ./...
 make test-cover   # run tests and open an HTML coverage report
 make lint         # go vet ./...
