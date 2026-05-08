@@ -12,6 +12,7 @@ import (
 
 	"github.com/gerrowadat/nomad-botherer/internal/config"
 	"github.com/gerrowadat/nomad-botherer/internal/gitwatch"
+	"github.com/gerrowadat/nomad-botherer/internal/grpcserver"
 	"github.com/gerrowadat/nomad-botherer/internal/nomad"
 	"github.com/gerrowadat/nomad-botherer/internal/server"
 )
@@ -95,6 +96,20 @@ func main() {
 
 	// Watcher polls git and triggers onChange on new commits.
 	go watcher.Run(ctx)
+
+	// Start gRPC server if configured.
+	if cfg.GRPCListenAddr != "" {
+		if cfg.GRPCAPIKey == "" {
+			slog.Error("grpc-listen-addr is set but grpc-api-key is empty; refusing to start an unauthenticated gRPC server")
+			os.Exit(1)
+		}
+		grpcSrv := grpcserver.New(cfg.GRPCAPIKey, differ, watcher)
+		go func() {
+			if err := grpcSrv.Run(ctx, cfg.GRPCListenAddr); err != nil {
+				slog.Error("gRPC server error", "err", err)
+			}
+		}()
+	}
 
 	srv := server.New(cfg, differ, watcher, version)
 	if err := srv.Run(ctx); err != nil {

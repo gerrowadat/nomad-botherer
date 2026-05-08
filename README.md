@@ -22,6 +22,10 @@ Three kinds of drift are tracked:
 - [Quick start](#quick-start)
 - [Configuration](#configuration)
 - [Webhooks](#webhooks)
+- [gRPC API](#grpc-api)
+  - [Authentication](#authentication)
+  - [Available RPCs](#available-rpcs)
+  - [CLI examples](#cli-examples)
 - [Monitoring](#monitoring)
   - [`/healthz`](#healthz)
   - [`/metrics`](#metrics)
@@ -120,6 +124,8 @@ Every flag has a corresponding environment variable. Environment variables are r
 | `--listen-addr` | `LISTEN_ADDR` | `:8080` | HTTP listen address |
 | `--webhook-secret` | `WEBHOOK_SECRET` | | GitHub webhook HMAC secret |
 | `--webhook-path` | `WEBHOOK_PATH` | `/webhook` | Webhook endpoint path |
+| `--grpc-listen-addr` | `GRPC_LISTEN_ADDR` | `:9090` | gRPC listen address. Set to empty string (`""`) to disable the gRPC server |
+| `--grpc-api-key` | `GRPC_API_KEY` | | Pre-shared API key for gRPC authentication. Required when `--grpc-listen-addr` is non-empty |
 | `--diff-interval` | `DIFF_INTERVAL` | `1m` | Periodic Nomad-side drift check interval |
 | `--include-dead-jobs` | `INCLUDE_DEAD_JOBS` | `false` | Treat dead Nomad jobs like running ones (by default dead jobs count as missing) |
 | `--log-level` | `LOG_LEVEL` | `info` | Log level: `debug`, `info`, `warn`, `error` |
@@ -144,6 +150,126 @@ Configuring a webhook removes the latency between a push to the repo and the nex
 The service handles `push` events (triggers a fetch + diff) and `ping` events (acknowledged, no action). All other event types are silently ignored with a `200 OK`.
 
 If `--webhook-secret` is empty, signature verification is skipped. In production, always set a secret.
+
+---
+
+## gRPC API
+
+nomad-botherer exposes a gRPC server on `--grpc-listen-addr` (default `:9090`).
+The server starts automatically unless the address is set to an empty string.
+Setting a non-empty address without also setting an API key is a startup error.
+
+The service is defined in [`proto/nomad_botherer.proto`](proto/nomad_botherer.proto).
+Go bindings are pre-generated in `internal/grpcapi/` — no code generation is required
+to build the binary.
+
+### Authentication
+
+All RPCs require a pre-shared API key in the `authorization` gRPC metadata header:
+
+```
+authorization: Bearer <your-api-key>
+```
+
+There is no TLS termination built in. In production, put the gRPC port behind a
+TLS-terminating proxy (e.g. nginx, Envoy, or a load balancer), or restrict access
+at the network level. The API key protects against unauthenticated reads on an
+already-reachable port; it is not a substitute for transport security.
+
+### Available RPCs
+
+| RPC | Request | Response | Description |
+|-----|---------|----------|-------------|
+| `GetDiffs` | `GetDiffsRequest` | `GetDiffsResponse` | Returns all currently-detected job diffs, plus the last check time and git commit |
+| `GetStatus` | `GetStatusRequest` | `GetStatusResponse` | Returns git watcher status: last commit hash and last successful fetch time |
+| `TriggerRefresh` | `TriggerRefreshRequest` | `TriggerRefreshResponse` | Triggers an immediate git pull and diff check (same effect as a webhook push event) |
+
+### CLI examples
+
+The examples below use [`grpcurl`](https://github.com/fullstackio/grpcurl), which can be installed with:
+
+```bash
+go install github.com/fullstackio/grpcurl/cmd/grpcurl@latest
+# or: brew install grpcurl
+```
+
+**List available RPCs** (requires the `.proto` file or a reflection-enabled server):
+
+```bash
+grpcurl -plaintext \
+  -proto proto/nomad_botherer.proto \
+  localhost:9090 list nomad_botherer.v1.NomadBotherer
+```
+
+**Get current diffs:**
+
+```bash
+grpcurl -plaintext \
+  -proto proto/nomad_botherer.proto \
+  -H 'authorization: Bearer your-api-key' \
+  localhost:9090 nomad_botherer.v1.NomadBotherer/GetDiffs
+```
+
+Example output when drift is detected:
+
+```json
+{
+  "diffs": [
+    {
+      "jobId": "api-server",
+      "hclFile": "jobs/api-server.hcl",
+      "diffType": "modified",
+      "detail": "Nomad plan shows diff type \"Edited\""
+    },
+    {
+      "jobId": "legacy-worker",
+      "diffType": "missing_from_hcl"
+    }
+  ],
+  "lastCheckTime": "2026-05-08T12:00:00Z",
+  "lastCommit": "abc1234def5678"
+}
+```
+
+**Get git watcher status:**
+
+```bash
+grpcurl -plaintext \
+  -proto proto/nomad_botherer.proto \
+  -H 'authorization: Bearer your-api-key' \
+  localhost:9090 nomad_botherer.v1.NomadBotherer/GetStatus
+```
+
+```json
+{
+  "lastCommit": "abc1234def5678",
+  "lastUpdateTime": "2026-05-08T11:59:50Z"
+}
+```
+
+**Trigger an immediate refresh:**
+
+```bash
+grpcurl -plaintext \
+  -proto proto/nomad_botherer.proto \
+  -H 'authorization: Bearer your-api-key' \
+  localhost:9090 nomad_botherer.v1.NomadBotherer/TriggerRefresh
+```
+
+```json
+{
+  "message": "refresh triggered"
+}
+```
+
+**Calling from a different host** (e.g. from a workstation against a remote deployment):
+
+```bash
+grpcurl -plaintext \
+  -proto proto/nomad_botherer.proto \
+  -H 'authorization: Bearer your-api-key' \
+  nomad-botherer.internal:9090 nomad_botherer.v1.NomadBotherer/GetDiffs
+```
 
 ---
 
@@ -223,6 +349,15 @@ These metrics describe incoming webhook events from GitHub.
 | `nomad_botherer_webhook_events_total` | Counter | `event` (`push`, `ping`, `unknown`, `error`) | Webhook events received by type. `push` events trigger an immediate fetch. `error` events indicate a failed delivery (bad signature, parse error, etc.). |
 | `nomad_botherer_last_webhook_success_timestamp_seconds` | Gauge | — | Unix timestamp of the last successfully processed webhook. Zero if no webhook has been received yet. |
 | `nomad_botherer_last_webhook_failure_timestamp_seconds` | Gauge | — | Unix timestamp of the last failed webhook delivery. Zero if no failure has occurred. |
+
+#### gRPC
+
+These metrics describe requests to the gRPC server. They are only present when `--grpc-listen-addr` is configured.
+
+| Metric | Type | Labels | What it tells you |
+|--------|------|--------|-------------------|
+| `nomad_botherer_grpc_requests_total` | Counter | `method`, `code` | Authenticated gRPC requests completed, by full method name and gRPC status code. |
+| `nomad_botherer_grpc_auth_errors_total` | Counter | `method` | Requests rejected due to a missing or invalid API key, by method. |
 
 #### Service info
 

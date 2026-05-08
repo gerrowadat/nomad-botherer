@@ -238,3 +238,72 @@ func TestLoadFromArgs_PollIntervalEnv(t *testing.T) {
 		t.Errorf("want 10s, got %v", cfg.PollInterval)
 	}
 }
+
+func TestLoadFromArgs_GRPCDefaults(t *testing.T) {
+	for _, k := range []string{"GRPC_LISTEN_ADDR", "GRPC_API_KEY"} {
+		os.Unsetenv(k)
+	}
+	cfg, err := LoadFromArgs(newFS(), []string{"--repo-url", "https://example.com/r.git"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.GRPCListenAddr != ":9090" {
+		t.Errorf("GRPCListenAddr: want :9090, got %q", cfg.GRPCListenAddr)
+	}
+	if cfg.GRPCAPIKey != "" {
+		t.Errorf("GRPCAPIKey: want empty, got %q", cfg.GRPCAPIKey)
+	}
+}
+
+func TestLoadFromArgs_GRPCFlags(t *testing.T) {
+	for _, k := range []string{"GRPC_LISTEN_ADDR", "GRPC_API_KEY"} {
+		os.Unsetenv(k)
+	}
+	cfg, err := LoadFromArgs(newFS(), []string{
+		"--repo-url", "https://example.com/r.git",
+		"--grpc-listen-addr", ":19090",
+		"--grpc-api-key", "mysecretkey",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.GRPCListenAddr != ":19090" {
+		t.Errorf("GRPCListenAddr: want :19090, got %q", cfg.GRPCListenAddr)
+	}
+	if cfg.GRPCAPIKey != "mysecretkey" {
+		t.Errorf("GRPCAPIKey: want mysecretkey, got %q", cfg.GRPCAPIKey)
+	}
+}
+
+func TestLoadFromArgs_GRPCEnvVars(t *testing.T) {
+	os.Setenv("GRPC_LISTEN_ADDR", ":29090")
+	os.Setenv("GRPC_API_KEY", "envkey")
+	t.Cleanup(func() {
+		os.Unsetenv("GRPC_LISTEN_ADDR")
+		os.Unsetenv("GRPC_API_KEY")
+	})
+	cfg, err := LoadFromArgs(newFS(), []string{"--repo-url", "https://example.com/r.git"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.GRPCListenAddr != ":29090" {
+		t.Errorf("GRPCListenAddr: want :29090, got %q", cfg.GRPCListenAddr)
+	}
+	if cfg.GRPCAPIKey != "envkey" {
+		t.Errorf("GRPCAPIKey: want envkey, got %q", cfg.GRPCAPIKey)
+	}
+}
+
+func TestLoadFromArgs_GRPCDisabled(t *testing.T) {
+	os.Unsetenv("GRPC_LISTEN_ADDR")
+	cfg, err := LoadFromArgs(newFS(), []string{
+		"--repo-url", "https://example.com/r.git",
+		"--grpc-listen-addr", "",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.GRPCListenAddr != "" {
+		t.Errorf("GRPCListenAddr: want empty (disabled), got %q", cfg.GRPCListenAddr)
+	}
+}
