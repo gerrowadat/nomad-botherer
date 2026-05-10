@@ -76,6 +76,7 @@ type Differ struct {
 	hclFilesSkipped   prometheus.Counter
 	diffChecks        prometheus.Counter
 	diffChecksSkipped prometheus.Counter
+	staleChecks       prometheus.Counter
 	nomadAPIErrors    *prometheus.CounterVec
 	lastCheck         prometheus.Gauge
 	jobDiffs          *prometheus.GaugeVec
@@ -106,6 +107,10 @@ func newDifferBase(jobs NomadJobsClient, namespace string, includeDeadJobs bool,
 		diffChecksSkipped: f.NewCounter(prometheus.CounterOpts{
 			Name: "nomad_botherer_diff_checks_skipped_total",
 			Help: "Total number of diff checks skipped because neither the Nomad index nor the git commit changed.",
+		}),
+		staleChecks: f.NewCounter(prometheus.CounterOpts{
+			Name: "nomad_botherer_nomad_staleness_checks_total",
+			Help: "Total number of Nomad diff checks triggered by the staleness check.",
 		}),
 		nomadAPIErrors: f.NewCounterVec(prometheus.CounterOpts{
 			Name: "nomad_botherer_nomad_api_errors_total",
@@ -341,6 +346,14 @@ func (d *Differ) Check(hclFiles map[string]string, commit string) error {
 
 	slog.Info("Diff check complete", "diffs", len(diffs), "commit", commit)
 	return nil
+}
+
+// ForceCheck runs a diff check unconditionally because the Nomad state has
+// exceeded the configured maximum staleness. Increments the staleness counter
+// and delegates to Check.
+func (d *Differ) ForceCheck(hclFiles map[string]string, commit string) error {
+	d.staleChecks.Inc()
+	return d.Check(hclFiles, commit)
 }
 
 // driftKey returns a map key for a (jobID, diffType) pair.

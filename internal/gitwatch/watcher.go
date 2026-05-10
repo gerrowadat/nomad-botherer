@@ -36,9 +36,10 @@ type Watcher struct {
 	triggerCh chan struct{}
 	onChange  func(commit string)
 
-	gitFetches     prometheus.Counter
-	gitFetchErrors prometheus.Counter
-	gitLastUpdate  prometheus.Gauge
+	gitFetches          prometheus.Counter
+	gitFetchErrors      prometheus.Counter
+	gitLastUpdate       prometheus.Gauge
+	staleRefreshes      prometheus.Counter
 }
 
 // New creates a Watcher that registers metrics into the default Prometheus registry.
@@ -65,6 +66,10 @@ func NewWithRegistry(cfg *config.Config, onChange func(commit string), reg prome
 		gitLastUpdate: f.NewGauge(prometheus.GaugeOpts{
 			Name: "nomad_botherer_git_last_update_timestamp_seconds",
 			Help: "Unix timestamp of the most recent successful git fetch.",
+		}),
+		staleRefreshes: f.NewCounter(prometheus.CounterOpts{
+			Name: "nomad_botherer_git_staleness_refreshes_total",
+			Help: "Total number of git fetches triggered by the staleness check.",
 		}),
 	}
 }
@@ -138,6 +143,14 @@ func (w *Watcher) Trigger() {
 	case w.triggerCh <- struct{}{}:
 	default:
 	}
+}
+
+// TriggerStale schedules an immediate fetch because the repo has exceeded the
+// configured maximum staleness. Increments the staleness counter and delegates
+// to Trigger.
+func (w *Watcher) TriggerStale() {
+	w.staleRefreshes.Inc()
+	w.Trigger()
 }
 
 // Ready reports whether the initial clone has completed successfully.

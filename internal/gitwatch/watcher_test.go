@@ -178,6 +178,26 @@ func TestWatcher_Trigger_SendsSignal(t *testing.T) {
 	}
 }
 
+func TestWatcher_TriggerStale_SendsSignal(t *testing.T) {
+	w := newTestWatcher(&config.Config{PollInterval: time.Minute}, nil)
+	w.TriggerStale()
+
+	select {
+	case <-w.triggerCh:
+		// Good
+	default:
+		t.Error("TriggerStale() did not send to triggerCh")
+	}
+}
+
+func TestWatcher_TriggerStale_NonBlocking(t *testing.T) {
+	w := newTestWatcher(&config.Config{PollInterval: time.Minute}, nil)
+	// Should not block even when called repeatedly with no reader.
+	for i := 0; i < 10; i++ {
+		w.TriggerStale()
+	}
+}
+
 // ── Run ───────────────────────────────────────────────────────────────────────
 
 func TestWatcher_Run_ReturnsOnContextCancel(t *testing.T) {

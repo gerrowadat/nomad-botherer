@@ -294,6 +294,43 @@ func TestLoadFromArgs_GRPCEnvVars(t *testing.T) {
 	}
 }
 
+func TestLoadFromArgs_MaxStalenessDefault(t *testing.T) {
+	os.Unsetenv("MAX_STALENESS")
+	cfg, err := LoadFromArgs(newFS(), []string{"--repo-url", "https://example.com/r.git"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.MaxStaleness != 0 {
+		t.Errorf("MaxStaleness: want 0 (disabled), got %v", cfg.MaxStaleness)
+	}
+}
+
+func TestLoadFromArgs_MaxStalenessFlag(t *testing.T) {
+	os.Unsetenv("MAX_STALENESS")
+	cfg, err := LoadFromArgs(newFS(), []string{
+		"--repo-url", "https://example.com/r.git",
+		"--max-staleness", "30m",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.MaxStaleness != 30*time.Minute {
+		t.Errorf("MaxStaleness: want 30m, got %v", cfg.MaxStaleness)
+	}
+}
+
+func TestLoadFromArgs_MaxStalenessEnv(t *testing.T) {
+	os.Setenv("MAX_STALENESS", "15m")
+	t.Cleanup(func() { os.Unsetenv("MAX_STALENESS") })
+	cfg, err := LoadFromArgs(newFS(), []string{"--repo-url", "https://example.com/r.git"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.MaxStaleness != 15*time.Minute {
+		t.Errorf("MaxStaleness: want 15m, got %v", cfg.MaxStaleness)
+	}
+}
+
 func TestLoadFromArgs_GRPCDisabled(t *testing.T) {
 	os.Unsetenv("GRPC_LISTEN_ADDR")
 	cfg, err := LoadFromArgs(newFS(), []string{

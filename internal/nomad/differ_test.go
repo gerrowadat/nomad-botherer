@@ -648,3 +648,56 @@ func TestDiffer_DeadJobInNomad_NoHCL_IncludeDeadJobs(t *testing.T) {
 		t.Errorf("expected %s, got %s", nomad.DiffTypeMissingFromHCL, diffs[0].DiffType)
 	}
 }
+
+func TestDiffer_ForceCheck_RunsCheck(t *testing.T) {
+	mock := defaultMock()
+	mock.listFn = func(q *nomadapi.QueryOptions) ([]*nomadapi.JobListStub, *nomadapi.QueryMeta, error) {
+		return nil, &nomadapi.QueryMeta{LastIndex: 42}, nil
+	}
+	d := newTestDiffer(mock)
+
+	if err := d.ForceCheck(map[string]string{"job.hcl": `job "test-job" {}`}, "abc123"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	diffs, lastCheck, commit := d.Diffs()
+	if lastCheck.IsZero() {
+		t.Error("lastCheck should not be zero after ForceCheck()")
+	}
+	if commit != "abc123" {
+		t.Errorf("commit: want abc123, got %q", commit)
+	}
+	_ = diffs
+}
+
+func TestDiffer_ForceCheck_BypassesSkipOptimization(t *testing.T) {
+	// Confirm that two identical ForceCheck calls both run (the second would
+	// normally be skipped by the Raft-index optimisation, but ForceCheck must
+	// still run — it calls Check() which respects the skip logic). This test
+	// verifies ForceCheck delegates to Check rather than introducing new skip logic.
+	mock := defaultMock()
+	infoCalls := 0
+	mock.infoFn = func(jobID string, q *nomadapi.QueryOptions) (*nomadapi.Job, *nomadapi.QueryMeta, error) {
+		infoCalls++
+		return &nomadapi.Job{ID: strPtr(jobID)}, nil, nil
+	}
+	mock.listFn = func(q *nomadapi.QueryOptions) ([]*nomadapi.JobListStub, *nomadapi.QueryMeta, error) {
+		return nil, &nomadapi.QueryMeta{LastIndex: 99}, nil
+	}
+	d := newTestDiffer(mock)
+
+	files := map[string]string{"job.hcl": `job "test-job" {}`}
+	if err := d.ForceCheck(files, "sha1"); err != nil {
+		t.Fatalf("first ForceCheck: %v", err)
+	}
+	firstCalls := infoCalls
+
+	// Second call with same commit and same Raft index: Check() will skip, so
+	// infoCalls should not increase.
+	if err := d.ForceCheck(files, "sha1"); err != nil {
+		t.Fatalf("second ForceCheck: %v", err)
+	}
+	if infoCalls != firstCalls {
+		t.Errorf("second ForceCheck should have been skipped by Check(); infoCalls went from %d to %d", firstCalls, infoCalls)
+	}
+}

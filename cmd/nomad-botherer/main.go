@@ -94,6 +94,47 @@ func main() {
 		}
 	}()
 
+	// Staleness checker forces a refresh of git and Nomad state when either
+	// has not been updated within the configured maximum staleness window.
+	// Disabled when MaxStaleness is zero.
+	if cfg.MaxStaleness > 0 {
+		go func() {
+			// Check at half the staleness interval so we don't overshoot badly.
+			checkInterval := cfg.MaxStaleness / 2
+			if checkInterval < 10*time.Second {
+				checkInterval = 10 * time.Second
+			}
+			ticker := time.NewTicker(checkInterval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					_, lastGitUpdate := watcher.Status()
+					if !lastGitUpdate.IsZero() && time.Since(lastGitUpdate) > cfg.MaxStaleness {
+						slog.Info("Git repo is stale, triggering refresh", "age", time.Since(lastGitUpdate), "max", cfg.MaxStaleness)
+						watcher.TriggerStale()
+					}
+
+					_, lastNomadCheck, _ := differ.Diffs()
+					if !lastNomadCheck.IsZero() && time.Since(lastNomadCheck) > cfg.MaxStaleness {
+						slog.Info("Nomad state is stale, forcing diff check", "age", time.Since(lastNomadCheck), "max", cfg.MaxStaleness)
+						commit, _ := watcher.Status()
+						hclFiles, err := watcher.ReadHCLFiles()
+						if err != nil {
+							slog.Error("Reading HCL files for staleness check", "err", err)
+							continue
+						}
+						if err := differ.ForceCheck(hclFiles, commit); err != nil {
+							slog.Error("Staleness diff check failed", "err", err)
+						}
+					}
+				}
+			}
+		}()
+	}
+
 	// Watcher polls git and triggers onChange on new commits.
 	go watcher.Run(ctx)
 

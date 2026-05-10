@@ -47,7 +47,7 @@ Three kinds of drift are tracked:
 
    Dead jobs are excluded from both checks by default because a stopped job is expected state — it was intentionally halted. Pass `--include-dead-jobs` to treat dead jobs like running ones.
 5. Results are stored in memory and exposed via `/healthz` (JSON), `/metrics` (Prometheus), and the gRPC API.
-6. The repo is re-checked on every `--poll-interval` (git fetch), on every `--diff-interval` (Nomad-side drift), and immediately on a webhook push event or a `TriggerRefresh` gRPC call.
+6. The repo is re-checked on every `--poll-interval` (git fetch), on every `--diff-interval` (Nomad-side drift), and immediately on a webhook push event or a `TriggerRefresh` gRPC call. When `--max-staleness` is set, a background check forces a refresh of git and/or Nomad state if either has not been updated within the configured window — useful when webhooks are unreliable or paused for a period.
 
 ---
 
@@ -130,6 +130,7 @@ Every flag has a corresponding environment variable. Environment variables are r
 | `--grpc-api-key` | `GRPC_API_KEY` | | Pre-shared API key for gRPC authentication. Required when `--grpc-listen-addr` is non-empty |
 | `--diff-interval` | `DIFF_INTERVAL` | `1m` | Periodic Nomad-side drift check interval |
 | `--include-dead-jobs` | `INCLUDE_DEAD_JOBS` | `false` | Treat dead Nomad jobs like running ones (by default dead jobs count as missing) |
+| `--max-staleness` | `MAX_STALENESS` | `0` (disabled) | If the git repo or Nomad state has not been successfully refreshed within this window, force an immediate refresh. Set to `0` to disable. E.g. `--max-staleness=30m` |
 | `--log-level` | `LOG_LEVEL` | `info` | Log level: `debug`, `info`, `warn`, `error` |
 
 Logs are written to stderr as JSON (structured via `log/slog`).
