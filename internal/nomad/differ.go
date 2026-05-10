@@ -323,6 +323,15 @@ func driftKey(jobID, diffType string) string {
 	return jobID + "\x00" + diffType
 }
 
+// Ready reports whether at least one diff check has completed successfully.
+// Before the first check finishes, callers cannot distinguish "no drift" from
+// "haven't checked yet", so they should treat the Differ as unavailable.
+func (d *Differ) Ready() bool {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return !d.lastCheckTime.IsZero()
+}
+
 // Diffs returns a snapshot of the latest diffs, the time they were computed,
 // and the git commit they were computed against.
 func (d *Differ) Diffs() ([]JobDiff, time.Time, string) {

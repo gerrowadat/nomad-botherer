@@ -182,8 +182,8 @@ already-reachable port; it is not a substitute for transport security.
 
 | RPC | Request | Response | Description |
 |-----|---------|----------|-------------|
-| `GetDiffs` | `GetDiffsRequest` | `GetDiffsResponse` | Returns all currently-detected job diffs, plus the last check time and git commit |
-| `GetStatus` | `GetStatusRequest` | `GetStatusResponse` | Returns git watcher status: last commit hash and last successful fetch time |
+| `GetDiffs` | `GetDiffsRequest` | `GetDiffsResponse` | Returns all currently-detected job diffs, plus the last check time and git commit. Returns `codes.Unavailable` until startup is complete. |
+| `GetStatus` | `GetStatusRequest` | `GetStatusResponse` | Returns git watcher status: last commit hash and last successful fetch time. Returns `codes.Unavailable` until the initial clone completes. |
 | `TriggerRefresh` | `TriggerRefreshRequest` | `TriggerRefreshResponse` | Triggers an immediate git pull and diff check (same effect as a webhook push event) |
 | `GetVersion` | `GetVersionRequest` | `GetVersionResponse` | Returns the server's version string, git commit hash, and build date (as set by `-ldflags` at build time; defaults to `dev` / `unknown`) |
 
@@ -412,7 +412,7 @@ grpcurl -plaintext \
 
 ### `/healthz`
 
-Always returns **HTTP 200**. The JSON body describes the current drift state:
+Returns **HTTP 200** once the server has built its initial state (completed the first git clone and the first diff check). Until then it returns **HTTP 503** with `"status": "starting"`.
 
 ```json
 {
@@ -437,7 +437,9 @@ Always returns **HTTP 200**. The JSON body describes the current drift state:
 }
 ```
 
-`"status"` is `"ok"` when there are no diffs, `"diffs_detected"` otherwise.
+`"status"` is `"ok"` when there are no diffs, `"diffs_detected"` when drift is detected, and `"starting"` (with HTTP 503) before the first diff check completes.
+
+The `/diffs` endpoint and all gRPC RPCs that return state also return HTTP 503 / `codes.Unavailable` during startup.
 
 ### `/metrics`
 

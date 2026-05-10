@@ -32,6 +32,8 @@ func (m *mockDiffSource) Diffs() ([]nomad.JobDiff, time.Time, string) {
 	return m.diffs, m.lastCheck, m.lastCommit
 }
 
+func (m *mockDiffSource) Ready() bool { return !m.lastCheck.IsZero() }
+
 // mockGitSource implements server.GitStatusSource.
 type mockGitSource struct {
 	lastCommit string
@@ -41,6 +43,7 @@ type mockGitSource struct {
 
 func (m *mockGitSource) Trigger()                    { m.triggered = true }
 func (m *mockGitSource) Status() (string, time.Time) { return m.lastCommit, m.lastUpdate }
+func (m *mockGitSource) Ready() bool                 { return !m.lastUpdate.IsZero() }
 
 // newTestServer builds a Server with fresh per-test Prometheus registry.
 func newTestServer(t *testing.T, diffs []nomad.JobDiff) (*server.Server, *mockGitSource) {
@@ -577,5 +580,88 @@ func TestWebhook_WithSecret_InvalidSignature_Rejected(t *testing.T) {
 	}
 	if gitSrc.triggered {
 		t.Error("Trigger() should NOT be called when signature is invalid")
+	}
+}
+
+// ── readiness gate ────────────────────────────────────────────────────────────
+
+// newNotReadyServer builds a server where neither git nor diffs are ready.
+func newNotReadyServer(t *testing.T) *server.Server {
+	t.Helper()
+	cfg := &config.Config{ListenAddr: ":0", WebhookPath: "/webhook", Branch: "main"}
+	diffSrc := &mockDiffSource{} // zero lastCheck → not ready
+	gitSrc := &mockGitSource{}   // zero lastUpdate → not ready
+	return server.NewWithRegistry(cfg, diffSrc, gitSrc, "test", prometheus.NewRegistry())
+}
+
+func TestHealthz_NotReady_Returns503(t *testing.T) {
+	srv := newNotReadyServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("want 503, got %d", rec.Code)
+	}
+	var resp server.HealthResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Status != "starting" {
+		t.Errorf("want status starting, got %q", resp.Status)
+	}
+	if resp.Message == "" {
+		t.Error("want non-empty message when not ready")
+	}
+}
+
+func TestHealthz_GitNotReady_Returns503(t *testing.T) {
+	cfg := &config.Config{ListenAddr: ":0", WebhookPath: "/webhook", Branch: "main"}
+	diffSrc := &mockDiffSource{lastCheck: time.Now(), lastCommit: "abc"} // diffs ready
+	gitSrc := &mockGitSource{}                                            // git not ready
+	srv := server.NewWithRegistry(cfg, diffSrc, gitSrc, "test", prometheus.NewRegistry())
+
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("want 503 when git not ready, got %d", rec.Code)
+	}
+}
+
+func TestHealthz_DiffsNotReady_Returns503(t *testing.T) {
+	cfg := &config.Config{ListenAddr: ":0", WebhookPath: "/webhook", Branch: "main"}
+	diffSrc := &mockDiffSource{}                                                // diffs not ready
+	gitSrc := &mockGitSource{lastCommit: "abc", lastUpdate: time.Now()} // git ready
+	srv := server.NewWithRegistry(cfg, diffSrc, gitSrc, "test", prometheus.NewRegistry())
+
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("want 503 when diffs not ready, got %d", rec.Code)
+	}
+}
+
+func TestDiffs_NotReady_Returns503(t *testing.T) {
+	srv := newNotReadyServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/diffs", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("want 503, got %d", rec.Code)
+	}
+}
+
+func TestIndex_NotReady_Returns503(t *testing.T) {
+	srv := newNotReadyServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("want 503, got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "starting") {
+		t.Error("index page should show starting state when not ready")
 	}
 }

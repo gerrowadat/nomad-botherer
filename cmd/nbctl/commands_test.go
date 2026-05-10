@@ -27,14 +27,17 @@ func (m *mockDiffSource) Diffs() ([]nomad.JobDiff, time.Time, string) {
 	return m.diffs, m.lastCheck, m.lastCommit
 }
 
+func (m *mockDiffSource) Ready() bool { return !m.lastCheck.IsZero() }
+
 // mockGitSource implements grpcserver.GitStatusSource for tests.
 type mockGitSource struct {
 	lastCommit string
 	lastUpdate time.Time
 }
 
-func (m *mockGitSource) Trigger()                          {}
-func (m *mockGitSource) Status() (string, time.Time)       { return m.lastCommit, m.lastUpdate }
+func (m *mockGitSource) Trigger()                    {}
+func (m *mockGitSource) Status() (string, time.Time) { return m.lastCommit, m.lastUpdate }
+func (m *mockGitSource) Ready() bool                 { return !m.lastUpdate.IsZero() }
 
 // startServer starts a throwaway gRPC server and returns its address and a stop function.
 func startServer(t *testing.T, diffs grpcserver.DiffSource, git grpcserver.GitStatusSource, info grpcserver.BuildInfo) (addr string, stop func()) {
@@ -75,7 +78,8 @@ var defaultInfo = grpcserver.BuildInfo{
 // ── diffs ────────────────────────────────────────────────────────────────────
 
 func TestDiffsCmd_NoDiffs(t *testing.T) {
-	addr, stop := startServer(t, &mockDiffSource{}, &mockGitSource{}, defaultInfo)
+	now := time.Now()
+	addr, stop := startServer(t, &mockDiffSource{lastCheck: now}, &mockGitSource{lastUpdate: now}, defaultInfo)
 	defer stop()
 
 	out, err := runCmd(t, addr, testKey, "diffs")
@@ -104,7 +108,8 @@ func TestDiffsCmd_WithDiffs(t *testing.T) {
 		lastCheck:  time.Date(2026, 5, 8, 12, 0, 0, 0, time.UTC),
 		lastCommit: "abc123",
 	}
-	addr, stop := startServer(t, src, &mockGitSource{}, defaultInfo)
+	git := &mockGitSource{lastUpdate: time.Date(2026, 5, 8, 11, 0, 0, 0, time.UTC)}
+	addr, stop := startServer(t, src, git, defaultInfo)
 	defer stop()
 
 	out, err := runCmd(t, addr, testKey, "diffs")
@@ -126,8 +131,9 @@ func TestDiffsCmd_WithDiffs(t *testing.T) {
 }
 
 func TestDiffsCmd_JSON(t *testing.T) {
-	src := &mockDiffSource{lastCommit: "abc123"}
-	addr, stop := startServer(t, src, &mockGitSource{}, defaultInfo)
+	now := time.Now()
+	src := &mockDiffSource{lastCheck: now, lastCommit: "abc123"}
+	addr, stop := startServer(t, src, &mockGitSource{lastUpdate: now}, defaultInfo)
 	defer stop()
 
 	out, err := runCmd(t, addr, testKey, "diffs", "--output", "json")
@@ -161,17 +167,13 @@ func TestStatusCmd(t *testing.T) {
 	}
 }
 
-func TestStatusCmd_NoData(t *testing.T) {
+func TestStatusCmd_NotReady(t *testing.T) {
 	addr, stop := startServer(t, &mockDiffSource{}, &mockGitSource{}, defaultInfo)
 	defer stop()
 
-	out, err := runCmd(t, addr, testKey, "status")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	// Zero-value times produce "(none)" placeholders.
-	if strings.Count(out, "(none)") != 2 {
-		t.Errorf("want 2 '(none)' placeholders, got: %q", out)
+	_, err := runCmd(t, addr, testKey, "status")
+	if err == nil {
+		t.Fatal("expected error when server not ready, got nil")
 	}
 }
 
@@ -254,7 +256,8 @@ func TestWrongAPIKey(t *testing.T) {
 // ── env var fallback ──────────────────────────────────────────────────────────
 
 func TestAPIKeyFromEnv(t *testing.T) {
-	addr, stop := startServer(t, &mockDiffSource{}, &mockGitSource{}, defaultInfo)
+	now := time.Now()
+	addr, stop := startServer(t, &mockDiffSource{lastCheck: now}, &mockGitSource{lastUpdate: now}, defaultInfo)
 	defer stop()
 
 	t.Setenv("NBCTL_API_KEY", testKey)
@@ -270,7 +273,8 @@ func TestAPIKeyFromEnv(t *testing.T) {
 }
 
 func TestServerFromEnv(t *testing.T) {
-	addr, stop := startServer(t, &mockDiffSource{}, &mockGitSource{}, defaultInfo)
+	now := time.Now()
+	addr, stop := startServer(t, &mockDiffSource{lastCheck: now}, &mockGitSource{lastUpdate: now}, defaultInfo)
 	defer stop()
 
 	t.Setenv("NBCTL_SERVER", addr)

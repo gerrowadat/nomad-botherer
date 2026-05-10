@@ -140,6 +140,14 @@ func (w *Watcher) Trigger() {
 	}
 }
 
+// Ready reports whether the initial clone has completed successfully.
+// Before Clone returns, Status and ReadHCLFiles return zero/nil values.
+func (w *Watcher) Ready() bool {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	return w.repo != nil
+}
+
 // Status returns the last seen commit hash and the time it was seen.
 func (w *Watcher) Status() (lastCommit string, lastUpdate time.Time) {
 	w.mu.RLock()
