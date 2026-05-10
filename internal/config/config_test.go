@@ -294,6 +294,98 @@ func TestLoadFromArgs_GRPCEnvVars(t *testing.T) {
 	}
 }
 
+func TestLoadFromArgs_MaxGitStalenessDefault(t *testing.T) {
+	os.Unsetenv("MAX_GIT_STALENESS")
+	cfg, err := LoadFromArgs(newFS(), []string{"--repo-url", "https://example.com/r.git"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.MaxGitStaleness != 0 {
+		t.Errorf("MaxGitStaleness: want 0 (disabled), got %v", cfg.MaxGitStaleness)
+	}
+}
+
+func TestLoadFromArgs_MaxGitStalenessFlag(t *testing.T) {
+	os.Unsetenv("MAX_GIT_STALENESS")
+	cfg, err := LoadFromArgs(newFS(), []string{
+		"--repo-url", "https://example.com/r.git",
+		"--max-git-staleness", "30m",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.MaxGitStaleness != 30*time.Minute {
+		t.Errorf("MaxGitStaleness: want 30m, got %v", cfg.MaxGitStaleness)
+	}
+}
+
+func TestLoadFromArgs_MaxGitStalenessEnv(t *testing.T) {
+	os.Setenv("MAX_GIT_STALENESS", "15m")
+	t.Cleanup(func() { os.Unsetenv("MAX_GIT_STALENESS") })
+	cfg, err := LoadFromArgs(newFS(), []string{"--repo-url", "https://example.com/r.git"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.MaxGitStaleness != 15*time.Minute {
+		t.Errorf("MaxGitStaleness: want 15m, got %v", cfg.MaxGitStaleness)
+	}
+}
+
+func TestLoadFromArgs_MaxNomadStalenessDefault(t *testing.T) {
+	os.Unsetenv("MAX_NOMAD_STALENESS")
+	cfg, err := LoadFromArgs(newFS(), []string{"--repo-url", "https://example.com/r.git"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.MaxNomadStaleness != 0 {
+		t.Errorf("MaxNomadStaleness: want 0 (disabled), got %v", cfg.MaxNomadStaleness)
+	}
+}
+
+func TestLoadFromArgs_MaxNomadStalenessFlag(t *testing.T) {
+	os.Unsetenv("MAX_NOMAD_STALENESS")
+	cfg, err := LoadFromArgs(newFS(), []string{
+		"--repo-url", "https://example.com/r.git",
+		"--max-nomad-staleness", "10m",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.MaxNomadStaleness != 10*time.Minute {
+		t.Errorf("MaxNomadStaleness: want 10m, got %v", cfg.MaxNomadStaleness)
+	}
+}
+
+func TestLoadFromArgs_MaxNomadStalenessEnv(t *testing.T) {
+	os.Setenv("MAX_NOMAD_STALENESS", "5m")
+	t.Cleanup(func() { os.Unsetenv("MAX_NOMAD_STALENESS") })
+	cfg, err := LoadFromArgs(newFS(), []string{"--repo-url", "https://example.com/r.git"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.MaxNomadStaleness != 5*time.Minute {
+		t.Errorf("MaxNomadStaleness: want 5m, got %v", cfg.MaxNomadStaleness)
+	}
+}
+
+func TestLoadFromArgs_StalenessIndependent(t *testing.T) {
+	os.Unsetenv("MAX_GIT_STALENESS")
+	os.Unsetenv("MAX_NOMAD_STALENESS")
+	cfg, err := LoadFromArgs(newFS(), []string{
+		"--repo-url", "https://example.com/r.git",
+		"--max-git-staleness", "1h",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.MaxGitStaleness != time.Hour {
+		t.Errorf("MaxGitStaleness: want 1h, got %v", cfg.MaxGitStaleness)
+	}
+	if cfg.MaxNomadStaleness != 0 {
+		t.Errorf("MaxNomadStaleness: want 0 (disabled), got %v", cfg.MaxNomadStaleness)
+	}
+}
+
 func TestLoadFromArgs_GRPCDisabled(t *testing.T) {
 	os.Unsetenv("GRPC_LISTEN_ADDR")
 	cfg, err := LoadFromArgs(newFS(), []string{

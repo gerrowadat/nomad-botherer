@@ -94,6 +94,64 @@ func main() {
 		}
 	}()
 
+	// Git staleness checker: triggers a fetch when the repo has not been
+	// successfully fetched within MaxGitStaleness. Disabled when zero.
+	if cfg.MaxGitStaleness > 0 {
+		go func() {
+			checkInterval := cfg.MaxGitStaleness / 2
+			if checkInterval < 10*time.Second {
+				checkInterval = 10 * time.Second
+			}
+			ticker := time.NewTicker(checkInterval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					_, lastGitUpdate := watcher.Status()
+					if !lastGitUpdate.IsZero() && time.Since(lastGitUpdate) > cfg.MaxGitStaleness {
+						slog.Info("Git repo is stale, triggering refresh", "age", time.Since(lastGitUpdate), "max", cfg.MaxGitStaleness)
+						watcher.TriggerStale()
+					}
+				}
+			}
+		}()
+	}
+
+	// Nomad staleness checker: forces a diff check when Nomad state has not
+	// been checked within MaxNomadStaleness. Disabled when zero.
+	if cfg.MaxNomadStaleness > 0 {
+		go func() {
+			checkInterval := cfg.MaxNomadStaleness / 2
+			if checkInterval < 10*time.Second {
+				checkInterval = 10 * time.Second
+			}
+			ticker := time.NewTicker(checkInterval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					_, lastNomadCheck, _ := differ.Diffs()
+					if !lastNomadCheck.IsZero() && time.Since(lastNomadCheck) > cfg.MaxNomadStaleness {
+						slog.Info("Nomad state is stale, forcing diff check", "age", time.Since(lastNomadCheck), "max", cfg.MaxNomadStaleness)
+						commit, _ := watcher.Status()
+						hclFiles, err := watcher.ReadHCLFiles()
+						if err != nil {
+							slog.Error("Reading HCL files for staleness check", "err", err)
+							continue
+						}
+						if err := differ.ForceCheck(hclFiles, commit); err != nil {
+							slog.Error("Staleness diff check failed", "err", err)
+						}
+					}
+				}
+			}
+		}()
+	}
+
 	// Watcher polls git and triggers onChange on new commits.
 	go watcher.Run(ctx)
 
