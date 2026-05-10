@@ -46,8 +46,8 @@ Three kinds of drift are tracked:
 4. All jobs **currently running in Nomad** (non-dead) that have no corresponding HCL file → `missing_from_hcl`
 
    Dead jobs are excluded from both checks by default because a stopped job is expected state — it was intentionally halted. Pass `--include-dead-jobs` to treat dead jobs like running ones.
-5. Results are stored in memory and exposed via `/healthz` (JSON) and `/metrics` (Prometheus).
-6. The repo is re-checked on every `--poll-interval` (git fetch), on every `--diff-interval` (Nomad-side drift), and immediately on a webhook push event.
+5. Results are stored in memory and exposed via `/healthz` (JSON), `/metrics` (Prometheus), and the gRPC API.
+6. The repo is re-checked on every `--poll-interval` (git fetch), on every `--diff-interval` (Nomad-side drift), and immediately on a webhook push event or a `TriggerRefresh` gRPC call.
 
 ---
 
@@ -55,13 +55,14 @@ Three kinds of drift are tracked:
 
 ### From source
 
-Requires Go 1.22+.
+Requires Go 1.25+.
 
 ```bash
 git clone https://github.com/gerrowadat/nomad-botherer.git
 cd nomad-botherer
 make build
 ./nomad-botherer --help
+./nbctl --help
 ```
 
 ### Docker
@@ -534,7 +535,9 @@ docker run -d \
   -e GIT_TOKEN=ghp_... \
   -e NOMAD_ADDR=http://nomad.example.com:4646 \
   -e NOMAD_TOKEN=... \
+  -e GRPC_API_KEY=your-api-key \
   -p 8080:8080 \
+  -p 9090:9090 \
   ghcr.io/gerrowadat/nomad-botherer:latest
 ```
 
@@ -546,9 +549,13 @@ docker run -d \
   -e GIT_SSH_KEY=/run/secrets/ssh_key \
   -v /path/to/id_ed25519:/run/secrets/ssh_key:ro \
   -e NOMAD_ADDR=http://nomad.example.com:4646 \
+  -e GRPC_API_KEY=your-api-key \
   -p 8080:8080 \
+  -p 9090:9090 \
   ghcr.io/gerrowadat/nomad-botherer:latest
 ```
+
+Omit `-e GRPC_API_KEY` and `-p 9090:9090` if you do not need the gRPC API.
 
 Supported platforms: `linux/amd64`, `linux/arm64` (Raspberry Pi 4+).
 
@@ -625,7 +632,7 @@ make release-minor   # 1.2.3 → 1.3.0
 make release-major   # 1.2.3 → 2.0.0
 ```
 
-Each `make release-*` creates a signed annotated tag locally. Push it with:
+Each `make release-*` creates an annotated tag locally. Push it with:
 
 ```bash
 git push origin <tag>   # e.g. git push origin v1.2.4
