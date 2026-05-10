@@ -5,6 +5,7 @@ package grpcserver
 
 import (
 	"context"
+	"crypto/subtle"
 	"fmt"
 	"log/slog"
 	"net"
@@ -43,10 +44,12 @@ type BuildInfo struct {
 type Server struct {
 	grpcapi.UnimplementedNomadBothererServer
 
-	apiKey    string
-	diffs     DiffSource
-	git       GitStatusSource
-	buildInfo BuildInfo
+	// expectedToken is pre-computed as "Bearer <apiKey>" to avoid allocation
+	// per request and to allow constant-time comparison in the interceptor.
+	expectedToken string
+	diffs         DiffSource
+	git           GitStatusSource
+	buildInfo     BuildInfo
 
 	// Prometheus metrics
 	rpcTotal  *prometheus.CounterVec
@@ -61,17 +64,17 @@ func New(apiKey string, diffs DiffSource, git GitStatusSource, info BuildInfo) *
 // NewWithRegistry creates a Server with a custom Prometheus Registerer.
 func NewWithRegistry(apiKey string, diffs DiffSource, git GitStatusSource, info BuildInfo, reg prometheus.Registerer) *Server {
 	return &Server{
-		apiKey:    apiKey,
-		diffs:     diffs,
-		git:       git,
-		buildInfo: info,
+		expectedToken: "Bearer " + apiKey,
+		diffs:         diffs,
+		git:           git,
+		buildInfo:     info,
 		rpcTotal: promauto.With(reg).NewCounterVec(prometheus.CounterOpts{
 			Name: "nomad_botherer_grpc_requests_total",
-			Help: "Total number of gRPC requests, by method and status code.",
+			Help: "Authenticated gRPC requests completed, by method and gRPC status code. Does not include requests rejected before auth — see nomad_botherer_grpc_auth_errors_total for those.",
 		}, []string{"method", "code"}),
 		rpcErrors: promauto.With(reg).NewCounterVec(prometheus.CounterOpts{
 			Name: "nomad_botherer_grpc_auth_errors_total",
-			Help: "Total number of gRPC requests rejected due to authentication failure.",
+			Help: "gRPC requests rejected due to a missing or invalid API key, by method.",
 		}, []string{"method"}),
 	}
 }
@@ -87,13 +90,20 @@ func (s *Server) GRPCServer() *grpc.Server {
 	return srv
 }
 
-// Run starts listening on addr and blocks until ctx is cancelled.
-func (s *Server) Run(ctx context.Context, addr string) error {
+// Listen binds to addr and returns a net.Listener. Call Serve to start
+// accepting connections. Separating the two steps lets callers fail fast on
+// a bind error before detaching into a goroutine.
+func (s *Server) Listen(addr string) (net.Listener, error) {
 	lis, err := net.Listen("tcp", addr)
 	if err != nil {
-		return fmt.Errorf("grpc listen %s: %w", addr, err)
+		return nil, fmt.Errorf("grpc listen %s: %w", addr, err)
 	}
+	return lis, nil
+}
 
+// Serve starts accepting gRPC connections on lis and blocks until ctx is
+// cancelled, at which point it drains in-flight requests via GracefulStop.
+func (s *Server) Serve(ctx context.Context, lis net.Listener) error {
 	srv := s.GRPCServer()
 
 	go func() {
@@ -101,7 +111,7 @@ func (s *Server) Run(ctx context.Context, addr string) error {
 		srv.GracefulStop()
 	}()
 
-	slog.Info("gRPC server listening", "addr", addr)
+	slog.Info("gRPC server listening", "addr", lis.Addr())
 	if err := srv.Serve(lis); err != nil {
 		return fmt.Errorf("grpc serve: %w", err)
 	}
@@ -118,7 +128,7 @@ func (s *Server) authInterceptor(ctx context.Context, req any, info *grpc.UnaryS
 	}
 
 	values := md.Get("authorization")
-	if len(values) == 0 || values[0] != "Bearer "+s.apiKey {
+	if len(values) == 0 || subtle.ConstantTimeCompare([]byte(values[0]), []byte(s.expectedToken)) != 1 {
 		s.rpcErrors.WithLabelValues(info.FullMethod).Inc()
 		return nil, status.Error(codes.Unauthenticated, "invalid or missing API key")
 	}

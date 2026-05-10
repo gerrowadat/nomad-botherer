@@ -104,12 +104,18 @@ func main() {
 			os.Exit(1)
 		}
 		grpcSrv := grpcserver.New(cfg.GRPCAPIKey, differ, watcher, grpcserver.BuildInfo{
-				Version:   version,
-				Commit:    commit,
-				BuildDate: buildDate,
-			})
+			Version:   version,
+			Commit:    commit,
+			BuildDate: buildDate,
+		})
+		// Listen before the goroutine so a bind failure is fatal, not just logged.
+		grpcLis, err := grpcSrv.Listen(cfg.GRPCListenAddr)
+		if err != nil {
+			slog.Error("gRPC server failed to bind", "addr", cfg.GRPCListenAddr, "err", err)
+			os.Exit(1)
+		}
 		go func() {
-			if err := grpcSrv.Run(ctx, cfg.GRPCListenAddr); err != nil {
+			if err := grpcSrv.Serve(ctx, grpcLis); err != nil {
 				slog.Error("gRPC server error", "err", err)
 			}
 		}()

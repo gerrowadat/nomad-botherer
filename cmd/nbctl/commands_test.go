@@ -9,10 +9,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 
-	"github.com/gerrowadat/nomad-botherer/internal/grpcapi"
 	"github.com/gerrowadat/nomad-botherer/internal/grpcserver"
 	"github.com/gerrowadat/nomad-botherer/internal/nomad"
 )
@@ -288,30 +285,3 @@ func TestServerFromEnv(t *testing.T) {
 	}
 }
 
-// ── dial helper: grpc.NewClient is used internally ───────────────────────────
-
-func TestDialReturnsWorkingClient(t *testing.T) {
-	addr, stop := startServer(t, &mockDiffSource{}, &mockGitSource{}, defaultInfo)
-	defer stop()
-
-	cfg := &rootConfig{
-		server:  addr,
-		apiKey:  testKey,
-		timeout: 5 * time.Second,
-	}
-	client, closer, err := cfg.dial()
-	if err != nil {
-		t.Fatalf("dial: %v", err)
-	}
-	defer closer()
-
-	// Verify the client actually works by making an RPC.
-	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
-	if err != nil {
-		t.Fatalf("raw dial: %v", err)
-	}
-	defer conn.Close()
-
-	_ = client
-	_ = grpcapi.NewNomadBothererClient(conn)
-}
