@@ -5,7 +5,7 @@
 #     --build-arg VERSION=$(git describe --tags --always --dirty) \
 #     -t ghcr.io/gerrowadat/nomad-botherer:VERSION .
 
-FROM --platform=${BUILDPLATFORM} golang:1.24-alpine AS builder
+FROM --platform=${BUILDPLATFORM} golang:1.25-alpine AS builder
 
 ARG TARGETOS
 ARG TARGETARCH
@@ -35,6 +35,6 @@ COPY --from=builder /out/nomad-botherer /usr/local/bin/nomad-botherer
 
 USER nomad-botherer
 
-EXPOSE 8080
+EXPOSE 8080 9090
 
 ENTRYPOINT ["/usr/local/bin/nomad-botherer"]
