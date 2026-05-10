@@ -25,12 +25,16 @@ import (
 // DiffSource is satisfied by *nomad.Differ.
 type DiffSource interface {
 	Diffs() ([]nomad.JobDiff, time.Time, string)
+	// Ready reports whether at least one diff check has completed.
+	Ready() bool
 }
 
 // GitStatusSource is satisfied by *gitwatch.Watcher.
 type GitStatusSource interface {
 	Trigger()
 	Status() (lastCommit string, lastUpdate time.Time)
+	// Ready reports whether the initial git clone has completed.
+	Ready() bool
 }
 
 // BuildInfo holds the version strings injected at link time.
@@ -148,6 +152,9 @@ func (s *Server) authInterceptor(ctx context.Context, req any, info *grpc.UnaryS
 
 // GetDiffs returns the latest set of job diffs.
 func (s *Server) GetDiffs(_ context.Context, _ *grpcapi.GetDiffsRequest) (*grpcapi.GetDiffsResponse, error) {
+	if !s.git.Ready() || !s.diffs.Ready() {
+		return nil, status.Error(codes.Unavailable, "server is not ready: initial state not yet built")
+	}
 	diffs, lastCheck, lastCommit := s.diffs.Diffs()
 
 	pbDiffs := make([]*grpcapi.JobDiff, 0, len(diffs))
@@ -172,6 +179,9 @@ func (s *Server) GetDiffs(_ context.Context, _ *grpcapi.GetDiffsRequest) (*grpca
 
 // GetStatus returns git watcher status.
 func (s *Server) GetStatus(_ context.Context, _ *grpcapi.GetStatusRequest) (*grpcapi.GetStatusResponse, error) {
+	if !s.git.Ready() {
+		return nil, status.Error(codes.Unavailable, "server is not ready: git state not yet initialized")
+	}
 	lastCommit, lastUpdate := s.git.Status()
 	resp := &grpcapi.GetStatusResponse{
 		LastCommit: lastCommit,

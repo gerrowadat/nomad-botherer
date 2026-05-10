@@ -16,11 +16,12 @@ import (
 )
 
 // diffsResponse builds a /diffs response with full control over the diff source.
+// Both sources are "ready" (non-zero times) so the handler serves the render output.
 func diffsResponse(t *testing.T, diffs []nomad.JobDiff, lastCheck time.Time) string {
 	t.Helper()
 	cfg := &config.Config{ListenAddr: ":0", WebhookPath: "/webhook", Branch: "main"}
 	diffSrc := &mockDiffSource{diffs: diffs, lastCheck: lastCheck, lastCommit: "abc"}
-	gitSrc := &mockGitSource{}
+	gitSrc := &mockGitSource{lastUpdate: time.Now()}
 	srv := server.NewWithRegistry(cfg, diffSrc, gitSrc, "test", prometheus.NewRegistry())
 	req := httptest.NewRequest(http.MethodGet, "/diffs", nil)
 	rec := httptest.NewRecorder()
@@ -30,11 +31,11 @@ func diffsResponse(t *testing.T, diffs []nomad.JobDiff, lastCheck time.Time) str
 
 // ── renderDiffsText ───────────────────────────────────────────────────────────
 
-func TestDiffs_ZeroLastCheck(t *testing.T) {
-	body := diffsResponse(t, nil, time.Time{})
-	// Zero lastCheck: the "Last check:" line should not appear.
-	if strings.Contains(body, "Last check:") {
-		t.Error("zero lastCheck should not produce a 'Last check:' line")
+func TestDiffs_NoLastCheckLine(t *testing.T) {
+	// When lastCheck is provided as a non-zero time, the "Last check:" line should appear.
+	body := diffsResponse(t, nil, time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
+	if !strings.Contains(body, "Last check:") {
+		t.Error("non-zero lastCheck should produce a 'Last check:' line")
 	}
 	if !strings.Contains(body, "No differences") {
 		t.Error("expected 'No differences' message")

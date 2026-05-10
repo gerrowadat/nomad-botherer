@@ -31,11 +31,13 @@ func (m *mockDiffSource) Diffs() ([]nomad.JobDiff, time.Time, string) {
 	return m.diffs, m.lastCheck, m.lastCommit
 }
 
+func (m *mockDiffSource) Ready() bool { return !m.lastCheck.IsZero() }
+
 // mockGitSource implements grpcserver.GitStatusSource.
 type mockGitSource struct {
-	lastCommit  string
-	lastUpdate  time.Time
-	triggered   bool
+	lastCommit string
+	lastUpdate time.Time
+	triggered  bool
 }
 
 func (m *mockGitSource) Trigger() {
@@ -45,6 +47,8 @@ func (m *mockGitSource) Trigger() {
 func (m *mockGitSource) Status() (string, time.Time) {
 	return m.lastCommit, m.lastUpdate
 }
+
+func (m *mockGitSource) Ready() bool { return !m.lastUpdate.IsZero() }
 
 var testBuildInfo = grpcserver.BuildInfo{
 	Version:   "v1.2.3",
@@ -122,7 +126,7 @@ func TestGetDiffs_Empty(t *testing.T) {
 		lastCheck:  time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
 		lastCommit: "abc123",
 	}
-	gitSrc := &mockGitSource{}
+	gitSrc := &mockGitSource{lastUpdate: time.Date(2026, 1, 1, 11, 0, 0, 0, time.UTC)}
 	client, stop := startTestServer(t, diffSrc, gitSrc)
 	defer stop()
 
@@ -159,7 +163,7 @@ func TestGetDiffs_WithDiffs(t *testing.T) {
 		lastCheck:  now,
 		lastCommit: "def456",
 	}
-	gitSrc := &mockGitSource{}
+	gitSrc := &mockGitSource{lastUpdate: now}
 	client, stop := startTestServer(t, diffSrc, gitSrc)
 	defer stop()
 
@@ -194,18 +198,33 @@ func TestGetDiffs_WithDiffs(t *testing.T) {
 	}
 }
 
-func TestGetDiffs_ZeroLastCheck(t *testing.T) {
-	diffSrc := &mockDiffSource{}
-	gitSrc := &mockGitSource{}
+func TestGetDiffs_NotReady(t *testing.T) {
+	diffSrc := &mockDiffSource{} // zero lastCheck → not ready
+	gitSrc := &mockGitSource{}   // zero lastUpdate → not ready
 	client, stop := startTestServer(t, diffSrc, gitSrc)
 	defer stop()
 
-	resp, err := client.GetDiffs(authCtx(testAPIKey), &grpcapi.GetDiffsRequest{})
-	if err != nil {
-		t.Fatalf("GetDiffs: %v", err)
+	_, err := client.GetDiffs(authCtx(testAPIKey), &grpcapi.GetDiffsRequest{})
+	if err == nil {
+		t.Fatal("expected error when server not ready, got nil")
 	}
-	if resp.LastCheckTime != "" {
-		t.Fatalf("want empty last_check_time for zero time, got %q", resp.LastCheckTime)
+	if s, _ := status.FromError(err); s.Code() != codes.Unavailable {
+		t.Fatalf("want Unavailable, got %s", s.Code())
+	}
+}
+
+func TestGetDiffs_GitNotReady(t *testing.T) {
+	diffSrc := &mockDiffSource{lastCheck: time.Now(), lastCommit: "abc"} // diffs ready
+	gitSrc := &mockGitSource{}                                            // git not ready
+	client, stop := startTestServer(t, diffSrc, gitSrc)
+	defer stop()
+
+	_, err := client.GetDiffs(authCtx(testAPIKey), &grpcapi.GetDiffsRequest{})
+	if err == nil {
+		t.Fatal("expected error when git not ready, got nil")
+	}
+	if s, _ := status.FromError(err); s.Code() != codes.Unavailable {
+		t.Fatalf("want Unavailable, got %s", s.Code())
 	}
 }
 
@@ -233,18 +252,18 @@ func TestGetStatus(t *testing.T) {
 	}
 }
 
-func TestGetStatus_ZeroLastUpdate(t *testing.T) {
+func TestGetStatus_GitNotReady(t *testing.T) {
 	diffSrc := &mockDiffSource{}
-	gitSrc := &mockGitSource{}
+	gitSrc := &mockGitSource{} // zero lastUpdate → git not ready
 	client, stop := startTestServer(t, diffSrc, gitSrc)
 	defer stop()
 
-	resp, err := client.GetStatus(authCtx(testAPIKey), &grpcapi.GetStatusRequest{})
-	if err != nil {
-		t.Fatalf("GetStatus: %v", err)
+	_, err := client.GetStatus(authCtx(testAPIKey), &grpcapi.GetStatusRequest{})
+	if err == nil {
+		t.Fatal("expected error when git not ready, got nil")
 	}
-	if resp.LastUpdateTime != "" {
-		t.Fatalf("want empty last_update_time for zero time, got %q", resp.LastUpdateTime)
+	if s, _ := status.FromError(err); s.Code() != codes.Unavailable {
+		t.Fatalf("want Unavailable, got %s", s.Code())
 	}
 }
 
@@ -374,8 +393,9 @@ func TestMetrics_AuthErrorCounted(t *testing.T) {
 }
 
 func TestMetrics_SuccessfulRequestCounted(t *testing.T) {
-	diffSrc := &mockDiffSource{}
-	gitSrc := &mockGitSource{}
+	now := time.Now()
+	diffSrc := &mockDiffSource{lastCheck: now, lastCommit: "abc"}
+	gitSrc := &mockGitSource{lastUpdate: now}
 	reg := prometheus.NewRegistry()
 	srv := grpcserver.NewWithRegistry(testAPIKey, diffSrc, gitSrc, testBuildInfo, reg)
 

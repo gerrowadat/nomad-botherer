@@ -25,12 +25,16 @@ import (
 // DiffSource is satisfied by *nomad.Differ.
 type DiffSource interface {
 	Diffs() ([]nomad.JobDiff, time.Time, string)
+	// Ready reports whether at least one diff check has completed.
+	Ready() bool
 }
 
 // GitStatusSource is satisfied by *gitwatch.Watcher.
 type GitStatusSource interface {
 	Trigger()
 	Status() (lastCommit string, lastUpdate time.Time)
+	// Ready reports whether the initial git clone has completed.
+	Ready() bool
 }
 
 // Server holds the HTTP mux and all dependencies.
@@ -141,6 +145,7 @@ var indexTmpl = template.Must(template.New("index").Parse(`<!DOCTYPE html>
     h1   { margin-bottom: 0.2em; }
     .ok  { color: #2a7a2a; font-weight: bold; }
     .bad { color: #b94040; font-weight: bold; }
+    .starting { color: #7a6a00; font-weight: bold; }
     code { background: #f4f4f4; padding: 0.1em 0.3em; border-radius: 3px; }
     ul   { line-height: 1.8; }
   </style>
@@ -148,7 +153,9 @@ var indexTmpl = template.Must(template.New("index").Parse(`<!DOCTYPE html>
 <body>
   <h1>nomad-botherer <small>{{.Version}}</small></h1>
   <p>Status:
-    {{- if .DiffCount}}
+    {{- if .Starting}}
+    <span class="starting">starting — initial state not yet built</span>
+    {{- else if .DiffCount}}
     <span class="bad">{{.DiffCount}} difference(s) detected</span>
     {{- else}}
     <span class="ok">OK — no differences</span>
@@ -173,7 +180,14 @@ var indexTmpl = template.Must(template.New("index").Parse(`<!DOCTYPE html>
 `))
 
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
-	diffs, lastCheck, commit := s.diffs.Diffs()
+	starting := !s.git.Ready() || !s.diffs.Ready()
+
+	var diffs []nomad.JobDiff
+	var lastCheck time.Time
+	var commit string
+	if !starting {
+		diffs, lastCheck, commit = s.diffs.Diffs()
+	}
 
 	s.webhookMu.RLock()
 	lastOK := s.lastWebhookSuccess
@@ -181,14 +195,16 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	s.webhookMu.RUnlock()
 
 	data := struct {
-		Version        string
-		DiffCount      int
-		LastCheck      string
-		Commit         string
-		LastWebhookOK  string
+		Version         string
+		Starting        bool
+		DiffCount       int
+		LastCheck       string
+		Commit          string
+		LastWebhookOK   string
 		LastWebhookFail string
 	}{
 		Version:   s.version,
+		Starting:  starting,
 		DiffCount: len(diffs),
 		Commit:    commit,
 	}
@@ -203,10 +219,17 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if starting {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}
 	_ = indexTmpl.Execute(w, data)
 }
 
 func (s *Server) handleDiffs(w http.ResponseWriter, r *http.Request) {
+	if !s.git.Ready() || !s.diffs.Ready() {
+		http.Error(w, "not ready: initial state not yet built", http.StatusServiceUnavailable)
+		return
+	}
 	diffs, lastCheck, commit := s.diffs.Diffs()
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	fmt.Fprint(w, renderDiffsText(diffs, lastCheck, commit))
@@ -215,6 +238,7 @@ func (s *Server) handleDiffs(w http.ResponseWriter, r *http.Request) {
 // HealthResponse is the JSON body returned by /healthz.
 type HealthResponse struct {
 	Status     string      `json:"status"`
+	Message    string      `json:"message,omitempty"`
 	DiffCount  int         `json:"diff_count"`
 	Diffs      []DiffEntry `json:"diffs"`
 	LastCheck  string      `json:"last_check,omitempty"`
@@ -231,6 +255,16 @@ type DiffEntry struct {
 }
 
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
+	if !s.git.Ready() || !s.diffs.Ready() {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_ = json.NewEncoder(w).Encode(HealthResponse{
+			Status:  "starting",
+			Message: "initial state not yet built",
+		})
+		return
+	}
+
 	diffs, lastCheck, gitCommit := s.diffs.Diffs()
 	_, gitUpdated := s.git.Status()
 
