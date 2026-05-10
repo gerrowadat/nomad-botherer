@@ -22,6 +22,11 @@ Three kinds of drift are tracked:
 - [Quick start](#quick-start)
 - [Configuration](#configuration)
 - [Webhooks](#webhooks)
+- [gRPC API](#grpc-api)
+  - [Authentication](#authentication)
+  - [Available RPCs](#available-rpcs)
+  - [nbctl — operator CLI](#nbctl--operator-cli)
+  - [grpcurl examples](#grpcurl-examples)
 - [Monitoring](#monitoring)
   - [`/healthz`](#healthz)
   - [`/metrics`](#metrics)
@@ -41,8 +46,8 @@ Three kinds of drift are tracked:
 4. All jobs **currently running in Nomad** (non-dead) that have no corresponding HCL file → `missing_from_hcl`
 
    Dead jobs are excluded from both checks by default because a stopped job is expected state — it was intentionally halted. Pass `--include-dead-jobs` to treat dead jobs like running ones.
-5. Results are stored in memory and exposed via `/healthz` (JSON) and `/metrics` (Prometheus).
-6. The repo is re-checked on every `--poll-interval` (git fetch), on every `--diff-interval` (Nomad-side drift), and immediately on a webhook push event.
+5. Results are stored in memory and exposed via `/healthz` (JSON), `/metrics` (Prometheus), and the gRPC API.
+6. The repo is re-checked on every `--poll-interval` (git fetch), on every `--diff-interval` (Nomad-side drift), and immediately on a webhook push event or a `TriggerRefresh` gRPC call.
 
 ---
 
@@ -50,13 +55,14 @@ Three kinds of drift are tracked:
 
 ### From source
 
-Requires Go 1.22+.
+Requires Go 1.25+.
 
 ```bash
 git clone https://github.com/gerrowadat/nomad-botherer.git
 cd nomad-botherer
 make build
 ./nomad-botherer --help
+./nbctl --help
 ```
 
 ### Docker
@@ -120,6 +126,8 @@ Every flag has a corresponding environment variable. Environment variables are r
 | `--listen-addr` | `LISTEN_ADDR` | `:8080` | HTTP listen address |
 | `--webhook-secret` | `WEBHOOK_SECRET` | | GitHub webhook HMAC secret |
 | `--webhook-path` | `WEBHOOK_PATH` | `/webhook` | Webhook endpoint path |
+| `--grpc-listen-addr` | `GRPC_LISTEN_ADDR` | `:9090` | gRPC listen address. Set to empty string (`""`) to disable the gRPC server |
+| `--grpc-api-key` | `GRPC_API_KEY` | | Pre-shared API key for gRPC authentication. Required when `--grpc-listen-addr` is non-empty |
 | `--diff-interval` | `DIFF_INTERVAL` | `1m` | Periodic Nomad-side drift check interval |
 | `--include-dead-jobs` | `INCLUDE_DEAD_JOBS` | `false` | Treat dead Nomad jobs like running ones (by default dead jobs count as missing) |
 | `--log-level` | `LOG_LEVEL` | `info` | Log level: `debug`, `info`, `warn`, `error` |
@@ -144,6 +152,259 @@ Configuring a webhook removes the latency between a push to the repo and the nex
 The service handles `push` events (triggers a fetch + diff) and `ping` events (acknowledged, no action). All other event types are silently ignored with a `200 OK`.
 
 If `--webhook-secret` is empty, signature verification is skipped. In production, always set a secret.
+
+---
+
+## gRPC API
+
+nomad-botherer exposes a gRPC server on `--grpc-listen-addr` (default `:9090`).
+The server starts automatically unless the address is set to an empty string.
+Setting a non-empty address without also setting an API key is a startup error.
+
+The service is defined in [`proto/nomad_botherer.proto`](proto/nomad_botherer.proto).
+Go bindings are pre-generated in `internal/grpcapi/` — no code generation is required
+to build the binary.
+
+### Authentication
+
+All RPCs require a pre-shared API key in the `authorization` gRPC metadata header:
+
+```
+authorization: Bearer <your-api-key>
+```
+
+There is no TLS termination built in. In production, put the gRPC port behind a
+TLS-terminating proxy (e.g. nginx, Envoy, or a load balancer), or restrict access
+at the network level. The API key protects against unauthenticated reads on an
+already-reachable port; it is not a substitute for transport security.
+
+### Available RPCs
+
+| RPC | Request | Response | Description |
+|-----|---------|----------|-------------|
+| `GetDiffs` | `GetDiffsRequest` | `GetDiffsResponse` | Returns all currently-detected job diffs, plus the last check time and git commit |
+| `GetStatus` | `GetStatusRequest` | `GetStatusResponse` | Returns git watcher status: last commit hash and last successful fetch time |
+| `TriggerRefresh` | `TriggerRefreshRequest` | `TriggerRefreshResponse` | Triggers an immediate git pull and diff check (same effect as a webhook push event) |
+| `GetVersion` | `GetVersionRequest` | `GetVersionResponse` | Returns the server's version string, git commit hash, and build date (as set by `-ldflags` at build time; defaults to `dev` / `unknown`) |
+
+### nbctl — operator CLI
+
+`nbctl` is the purpose-built CLI for the gRPC API. It can be installed independently without cloning the repo:
+
+```bash
+go install github.com/gerrowadat/nomad-botherer/cmd/nbctl@latest
+```
+
+Or built locally alongside the server:
+
+```bash
+make build-ctl   # produces ./nbctl
+make build       # produces both ./nomad-botherer and ./nbctl
+```
+
+#### Configuration
+
+| Flag | Env var | Default | Description |
+|------|---------|---------|-------------|
+| `--server` / `-s` | `NBCTL_SERVER` | `localhost:9090` | gRPC server address |
+| `--api-key` / `-k` | `NBCTL_API_KEY` | | API key (required) |
+| `--timeout` | | `10s` | Per-request timeout |
+| `--output` / `-o` | | `text` | Output format: `text` or `json` |
+| `--tls` | | `false` | Use TLS for the gRPC connection |
+
+The API key is most conveniently set via the environment so it does not appear in shell history:
+
+```bash
+export NBCTL_API_KEY=your-api-key
+export NBCTL_SERVER=nomad-botherer.internal:9090
+```
+
+#### Commands
+
+**Show current job diffs:**
+
+```bash
+nbctl diffs
+```
+
+```
+2 diff(s) detected
+last check:  2026-05-08T12:00:00Z
+last commit: abc1234def5678
+
+[modified] api-server (jobs/api-server.hcl)
+  Nomad plan shows diff type "Edited"
+
+[missing_from_hcl] legacy-worker
+```
+
+**Show git watcher status:**
+
+```bash
+nbctl status
+```
+
+```
+last commit:  abc1234def5678
+last updated: 2026-05-08T11:59:50Z
+```
+
+**Trigger an immediate refresh:**
+
+```bash
+nbctl refresh
+```
+
+```
+refresh triggered
+```
+
+**Show the server's build version:**
+
+```bash
+nbctl version
+```
+
+```
+version:    v1.2.3
+commit:     abc1234def5678
+build date: 2026-05-08T10:00:00Z
+```
+
+**JSON output** (all commands support `--output json` / `-o json`):
+
+```bash
+nbctl diffs -o json
+```
+
+```json
+{
+  "diffs": [
+    {
+      "job_id": "api-server",
+      "hcl_file": "jobs/api-server.hcl",
+      "diff_type": "modified",
+      "detail": "Nomad plan shows diff type \"Edited\""
+    }
+  ],
+  "last_check_time": "2026-05-08T12:00:00Z",
+  "last_commit": "abc1234def5678"
+}
+```
+
+**Connecting to a remote server with TLS:**
+
+```bash
+nbctl --server nomad-botherer.internal:9090 --tls diffs
+```
+
+**`nbctl --version`** prints the CLI's own build version (set at link time via `-ldflags`; independent of the server version returned by `nbctl version`).
+
+### grpcurl examples
+
+The examples below use [`grpcurl`](https://github.com/fullstackio/grpcurl), which can be installed with:
+
+```bash
+go install github.com/fullstackio/grpcurl/cmd/grpcurl@latest
+# or: brew install grpcurl
+```
+
+**List available RPCs** (requires the `.proto` file or a reflection-enabled server):
+
+```bash
+grpcurl -plaintext \
+  -proto proto/nomad_botherer.proto \
+  localhost:9090 list nomad_botherer.v1.NomadBotherer
+```
+
+**Get current diffs:**
+
+```bash
+grpcurl -plaintext \
+  -proto proto/nomad_botherer.proto \
+  -H 'authorization: Bearer your-api-key' \
+  localhost:9090 nomad_botherer.v1.NomadBotherer/GetDiffs
+```
+
+Example output when drift is detected:
+
+```json
+{
+  "diffs": [
+    {
+      "jobId": "api-server",
+      "hclFile": "jobs/api-server.hcl",
+      "diffType": "modified",
+      "detail": "Nomad plan shows diff type \"Edited\""
+    },
+    {
+      "jobId": "legacy-worker",
+      "diffType": "missing_from_hcl"
+    }
+  ],
+  "lastCheckTime": "2026-05-08T12:00:00Z",
+  "lastCommit": "abc1234def5678"
+}
+```
+
+**Get git watcher status:**
+
+```bash
+grpcurl -plaintext \
+  -proto proto/nomad_botherer.proto \
+  -H 'authorization: Bearer your-api-key' \
+  localhost:9090 nomad_botherer.v1.NomadBotherer/GetStatus
+```
+
+```json
+{
+  "lastCommit": "abc1234def5678",
+  "lastUpdateTime": "2026-05-08T11:59:50Z"
+}
+```
+
+**Trigger an immediate refresh:**
+
+```bash
+grpcurl -plaintext \
+  -proto proto/nomad_botherer.proto \
+  -H 'authorization: Bearer your-api-key' \
+  localhost:9090 nomad_botherer.v1.NomadBotherer/TriggerRefresh
+```
+
+```json
+{
+  "message": "refresh triggered"
+}
+```
+
+**Get server version:**
+
+```bash
+grpcurl -plaintext \
+  -proto proto/nomad_botherer.proto \
+  -H 'authorization: Bearer your-api-key' \
+  localhost:9090 nomad_botherer.v1.NomadBotherer/GetVersion
+```
+
+```json
+{
+  "version": "v1.2.3",
+  "commit": "abc1234def5678",
+  "buildDate": "2026-05-08T10:00:00Z"
+}
+```
+
+Binaries built without `-ldflags` return `"version": "dev"`, `"commit": "unknown"`, `"buildDate": "unknown"`.
+
+**Calling from a different host** (e.g. from a workstation against a remote deployment):
+
+```bash
+grpcurl -plaintext \
+  -proto proto/nomad_botherer.proto \
+  -H 'authorization: Bearer your-api-key' \
+  nomad-botherer.internal:9090 nomad_botherer.v1.NomadBotherer/GetDiffs
+```
 
 ---
 
@@ -224,6 +485,15 @@ These metrics describe incoming webhook events from GitHub.
 | `nomad_botherer_last_webhook_success_timestamp_seconds` | Gauge | — | Unix timestamp of the last successfully processed webhook. Zero if no webhook has been received yet. |
 | `nomad_botherer_last_webhook_failure_timestamp_seconds` | Gauge | — | Unix timestamp of the last failed webhook delivery. Zero if no failure has occurred. |
 
+#### gRPC
+
+These metrics describe requests to the gRPC server. They are only present when `--grpc-listen-addr` is configured.
+
+| Metric | Type | Labels | What it tells you |
+|--------|------|--------|-------------------|
+| `nomad_botherer_grpc_requests_total` | Counter | `method`, `code` | Authenticated gRPC requests completed, by full method name and gRPC status code. |
+| `nomad_botherer_grpc_auth_errors_total` | Counter | `method` | Requests rejected due to a missing or invalid API key, by method. |
+
 #### Service info
 
 | Metric | Type | Labels | What it tells you |
@@ -265,7 +535,9 @@ docker run -d \
   -e GIT_TOKEN=ghp_... \
   -e NOMAD_ADDR=http://nomad.example.com:4646 \
   -e NOMAD_TOKEN=... \
+  -e GRPC_API_KEY=your-api-key \
   -p 8080:8080 \
+  -p 9090:9090 \
   ghcr.io/gerrowadat/nomad-botherer:latest
 ```
 
@@ -277,9 +549,13 @@ docker run -d \
   -e GIT_SSH_KEY=/run/secrets/ssh_key \
   -v /path/to/id_ed25519:/run/secrets/ssh_key:ro \
   -e NOMAD_ADDR=http://nomad.example.com:4646 \
+  -e GRPC_API_KEY=your-api-key \
   -p 8080:8080 \
+  -p 9090:9090 \
   ghcr.io/gerrowadat/nomad-botherer:latest
 ```
+
+Omit `-e GRPC_API_KEY` and `-p 9090:9090` if you do not need the gRPC API.
 
 Supported platforms: `linux/amd64`, `linux/arm64` (Raspberry Pi 4+).
 
@@ -312,7 +588,10 @@ make build
 ### Build and test
 
 ```bash
-make build        # compile for the current platform
+make build        # compile both nomad-botherer and nbctl
+make build-server # compile just the server
+make build-ctl    # compile just nbctl
+make install      # go install both binaries to $GOPATH/bin
 make test         # go test -race ./...
 make test-cover   # run tests and open an HTML coverage report
 make lint         # go vet ./...
@@ -353,7 +632,7 @@ make release-minor   # 1.2.3 → 1.3.0
 make release-major   # 1.2.3 → 2.0.0
 ```
 
-Each `make release-*` creates a signed annotated tag locally. Push it with:
+Each `make release-*` creates an annotated tag locally. Push it with:
 
 ```bash
 git push origin <tag>   # e.g. git push origin v1.2.4

@@ -1,8 +1,9 @@
 # If you prefer the allow list template instead of the deny list, see community template:
 # https://github.com/github/gitignore/blob/main/community/Golang/Go.AllowList.gitignore
 #
-# Built binary (root-anchored so it doesn't match cmd/nomad-botherer/)
+# Built binaries (root-anchored so they don't match the cmd/ subdirectories)
 /nomad-botherer
+/nbctl
 
 # Binaries for programs and plugins
 *.exe
