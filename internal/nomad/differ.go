@@ -65,20 +65,22 @@ type Differ struct {
 	namespace       string
 	includeDeadJobs bool
 
-	mu             sync.RWMutex
-	diffs          []JobDiff
-	lastCheckTime  time.Time
-	lastCommit     string
-	driftFirstSeen map[string]time.Time // key: driftKey(jobID, diffType); protected by mu
+	mu              sync.RWMutex
+	diffs           []JobDiff
+	lastCheckTime   time.Time
+	lastCommit      string
+	lastNomadIndex  uint64            // Raft index from the last successful List(); protected by mu
+	driftFirstSeen  map[string]time.Time // key: driftKey(jobID, diffType); protected by mu
 
-	hclParseErrors  prometheus.Counter
-	hclFilesSkipped prometheus.Counter
-	diffChecks      prometheus.Counter
-	nomadAPIErrors  *prometheus.CounterVec
-	lastCheck       prometheus.Gauge
-	jobDiffs        *prometheus.GaugeVec
-	driftedJobs     *prometheus.GaugeVec
-	jobDriftSince   *prometheus.GaugeVec
+	hclParseErrors    prometheus.Counter
+	hclFilesSkipped   prometheus.Counter
+	diffChecks        prometheus.Counter
+	diffChecksSkipped prometheus.Counter
+	nomadAPIErrors    *prometheus.CounterVec
+	lastCheck         prometheus.Gauge
+	jobDiffs          *prometheus.GaugeVec
+	driftedJobs       *prometheus.GaugeVec
+	jobDriftSince     *prometheus.GaugeVec
 }
 
 // newDifferBase constructs a Differ with metrics registered into reg.
@@ -100,6 +102,10 @@ func newDifferBase(jobs NomadJobsClient, namespace string, includeDeadJobs bool,
 		diffChecks: f.NewCounter(prometheus.CounterOpts{
 			Name: "nomad_botherer_diff_checks_total",
 			Help: "Total number of diff checks run against the Nomad cluster.",
+		}),
+		diffChecksSkipped: f.NewCounter(prometheus.CounterOpts{
+			Name: "nomad_botherer_diff_checks_skipped_total",
+			Help: "Total number of diff checks skipped because neither the Nomad index nor the git commit changed.",
 		}),
 		nomadAPIErrors: f.NewCounterVec(prometheus.CounterOpts{
 			Name: "nomad_botherer_nomad_api_errors_total",
@@ -154,11 +160,33 @@ func NewWithClientAndRegistry(cfg *config.Config, jobs NomadJobsClient, reg prom
 // Check compares the given HCL files (path → content) against the live Nomad
 // cluster and stores the results. commit is recorded for informational purposes.
 func (d *Differ) Check(hclFiles map[string]string, commit string) error {
-	slog.Info("Running diff check", "commit", commit, "hcl_files", len(hclFiles))
-	d.diffChecks.Inc()
-
 	q := &nomadapi.QueryOptions{Namespace: d.namespace}
 	wq := &nomadapi.WriteOptions{Namespace: d.namespace}
+
+	// List all Nomad jobs first. The returned Raft index lets us skip the
+	// expensive per-job work when neither Nomad state nor the git commit has
+	// changed since the last check.
+	allJobs, listMeta, err := d.jobs.List(q)
+	if err != nil {
+		d.nomadAPIErrors.WithLabelValues("list").Inc()
+		slog.Warn("Failed to list Nomad jobs", "err", err)
+		allJobs = nil
+		listMeta = nil
+	}
+
+	d.mu.RLock()
+	prevCommit := d.lastCommit
+	prevIndex := d.lastNomadIndex
+	d.mu.RUnlock()
+
+	if listMeta != nil && listMeta.LastIndex == prevIndex && commit == prevCommit {
+		slog.Debug("Skipping diff: Nomad index and commit unchanged", "index", listMeta.LastIndex, "commit", commit)
+		d.diffChecksSkipped.Inc()
+		return nil
+	}
+
+	slog.Info("Running diff check", "commit", commit, "hcl_files", len(hclFiles))
+	d.diffChecks.Inc()
 
 	// Parse all HCL files via the Nomad API.
 	hclJobs := make(map[string]*nomadapi.Job) // jobID → parsed job
@@ -244,22 +272,16 @@ func (d *Differ) Check(hclFiles map[string]string, commit string) error {
 	// Find jobs in Nomad that have no corresponding HCL file.
 	// Dead jobs are skipped unless --include-dead-jobs is set, since a dead
 	// job without HCL is expected (it was stopped intentionally).
-	allJobs, _, err := d.jobs.List(q)
-	if err != nil {
-		d.nomadAPIErrors.WithLabelValues("list").Inc()
-		slog.Warn("Failed to list Nomad jobs", "err", err)
-	} else {
-		for _, j := range allJobs {
-			if !d.includeDeadJobs && j.Status == "dead" {
-				continue
-			}
-			if _, ok := hclJobs[j.ID]; !ok {
-				diffs = append(diffs, JobDiff{
-					JobID:    j.ID,
-					DiffType: DiffTypeMissingFromHCL,
-					Detail:   fmt.Sprintf("job is running in Nomad (status: %s) but has no HCL definition in the repo", j.Status),
-				})
-			}
+	for _, j := range allJobs {
+		if !d.includeDeadJobs && j.Status == "dead" {
+			continue
+		}
+		if _, ok := hclJobs[j.ID]; !ok {
+			diffs = append(diffs, JobDiff{
+				JobID:    j.ID,
+				DiffType: DiffTypeMissingFromHCL,
+				Detail:   fmt.Sprintf("job is running in Nomad (status: %s) but has no HCL definition in the repo", j.Status),
+			})
 		}
 	}
 
@@ -275,6 +297,9 @@ func (d *Differ) Check(hclFiles map[string]string, commit string) error {
 	d.diffs = diffs
 	d.lastCheckTime = now
 	d.lastCommit = commit
+	if listMeta != nil {
+		d.lastNomadIndex = listMeta.LastIndex
+	}
 
 	// Remove entries that are no longer drifting.
 	for k := range d.driftFirstSeen {

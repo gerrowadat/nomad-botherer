@@ -516,6 +516,115 @@ func gatherJobDriftSince(t *testing.T, reg prometheus.Gatherer, job, diffType st
 	return 0
 }
 
+// TestDiffer_SkipOnUnchangedIndexAndCommit verifies that Check skips all
+// per-job API calls when both the Nomad Raft index and the git commit are
+// identical to the previous check.
+func TestDiffer_SkipOnUnchangedIndexAndCommit(t *testing.T) {
+	mock := defaultMock()
+	infoCalls := 0
+	mock.infoFn = func(jobID string, q *nomadapi.QueryOptions) (*nomadapi.Job, *nomadapi.QueryMeta, error) {
+		infoCalls++
+		return &nomadapi.Job{ID: strPtr(jobID)}, nil, nil
+	}
+	mock.listFn = func(q *nomadapi.QueryOptions) ([]*nomadapi.JobListStub, *nomadapi.QueryMeta, error) {
+		return nil, &nomadapi.QueryMeta{LastIndex: 42}, nil
+	}
+	d := newTestDiffer(mock)
+
+	if err := d.Check(map[string]string{"a.hcl": `job "test-job" {}`}, "abc123"); err != nil {
+		t.Fatal(err)
+	}
+	if infoCalls != 1 {
+		t.Fatalf("expected 1 Info call after first check, got %d", infoCalls)
+	}
+
+	// Second call: same commit, same Nomad index — must skip per-job work.
+	if err := d.Check(map[string]string{"a.hcl": `job "test-job" {}`}, "abc123"); err != nil {
+		t.Fatal(err)
+	}
+	if infoCalls != 1 {
+		t.Errorf("expected Info not called on skip, got %d total calls", infoCalls)
+	}
+}
+
+// TestDiffer_NoSkipOnChangedCommit verifies that a new git commit forces a
+// full check even when the Nomad index has not advanced.
+func TestDiffer_NoSkipOnChangedCommit(t *testing.T) {
+	mock := defaultMock()
+	infoCalls := 0
+	mock.infoFn = func(jobID string, q *nomadapi.QueryOptions) (*nomadapi.Job, *nomadapi.QueryMeta, error) {
+		infoCalls++
+		return &nomadapi.Job{ID: strPtr(jobID)}, nil, nil
+	}
+	mock.listFn = func(q *nomadapi.QueryOptions) ([]*nomadapi.JobListStub, *nomadapi.QueryMeta, error) {
+		return nil, &nomadapi.QueryMeta{LastIndex: 42}, nil
+	}
+	d := newTestDiffer(mock)
+
+	if err := d.Check(map[string]string{"a.hcl": `job "test-job" {}`}, "abc123"); err != nil {
+		t.Fatal(err)
+	}
+	// Different commit, same Nomad index — must not skip.
+	if err := d.Check(map[string]string{"a.hcl": `job "test-job" {}`}, "def456"); err != nil {
+		t.Fatal(err)
+	}
+	if infoCalls != 2 {
+		t.Errorf("expected 2 Info calls when commit changes, got %d", infoCalls)
+	}
+}
+
+// TestDiffer_NoSkipOnChangedNomadIndex verifies that an advanced Nomad Raft
+// index forces a full check even when the git commit is unchanged.
+func TestDiffer_NoSkipOnChangedNomadIndex(t *testing.T) {
+	mock := defaultMock()
+	infoCalls := 0
+	mock.infoFn = func(jobID string, q *nomadapi.QueryOptions) (*nomadapi.Job, *nomadapi.QueryMeta, error) {
+		infoCalls++
+		return &nomadapi.Job{ID: strPtr(jobID)}, nil, nil
+	}
+	nomadIndex := uint64(42)
+	mock.listFn = func(q *nomadapi.QueryOptions) ([]*nomadapi.JobListStub, *nomadapi.QueryMeta, error) {
+		return nil, &nomadapi.QueryMeta{LastIndex: nomadIndex}, nil
+	}
+	d := newTestDiffer(mock)
+
+	if err := d.Check(map[string]string{"a.hcl": `job "test-job" {}`}, "abc123"); err != nil {
+		t.Fatal(err)
+	}
+	// Advance the Nomad index, same commit — must not skip.
+	nomadIndex = 99
+	if err := d.Check(map[string]string{"a.hcl": `job "test-job" {}`}, "abc123"); err != nil {
+		t.Fatal(err)
+	}
+	if infoCalls != 2 {
+		t.Errorf("expected 2 Info calls when Nomad index advances, got %d", infoCalls)
+	}
+}
+
+// TestDiffer_NoSkipOnNilListMeta verifies that a nil QueryMeta (e.g. list
+// error) never triggers a skip.
+func TestDiffer_NoSkipOnNilListMeta(t *testing.T) {
+	mock := defaultMock()
+	infoCalls := 0
+	mock.infoFn = func(jobID string, q *nomadapi.QueryOptions) (*nomadapi.Job, *nomadapi.QueryMeta, error) {
+		infoCalls++
+		return &nomadapi.Job{ID: strPtr(jobID)}, nil, nil
+	}
+	mock.listFn = func(q *nomadapi.QueryOptions) ([]*nomadapi.JobListStub, *nomadapi.QueryMeta, error) {
+		return nil, nil, nil // nil meta, no error
+	}
+	d := newTestDiffer(mock)
+
+	for i := 0; i < 3; i++ {
+		if err := d.Check(map[string]string{"a.hcl": `job "test-job" {}`}, "abc123"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if infoCalls != 3 {
+		t.Errorf("expected 3 Info calls with nil meta (no skip), got %d", infoCalls)
+	}
+}
+
 // TestDiffer_DeadJobInNomad_NoHCL_IncludeDeadJobs verifies that with
 // IncludeDeadJobs=true a dead Nomad job without HCL IS reported as missing_from_hcl.
 func TestDiffer_DeadJobInNomad_NoHCL_IncludeDeadJobs(t *testing.T) {
