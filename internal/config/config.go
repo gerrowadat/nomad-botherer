@@ -37,7 +37,8 @@ type Config struct {
 	IncludeDeadJobs bool
 
 	// Staleness
-	MaxStaleness time.Duration
+	MaxGitStaleness   time.Duration
+	MaxNomadStaleness time.Duration
 
 	// Logging
 	LogLevel string
@@ -74,7 +75,8 @@ func LoadFromArgs(fs *flag.FlagSet, args []string) (*Config, error) {
 
 	fs.DurationVar(&c.DiffInterval, "diff-interval", envDurationOrDefault("DIFF_INTERVAL", time.Minute), "How often to run a diff check regardless of git changes")
 	fs.BoolVar(&c.IncludeDeadJobs, "include-dead-jobs", envBoolOrDefault("INCLUDE_DEAD_JOBS", false), "Treat dead Nomad jobs like running ones (by default dead jobs are treated as missing)")
-	fs.DurationVar(&c.MaxStaleness, "max-staleness", envDurationOrDefault("MAX_STALENESS", 0), "Maximum time since last successful git fetch or Nomad check before forcing a refresh (0 disables staleness checking)")
+	fs.DurationVar(&c.MaxGitStaleness, "max-git-staleness", envDurationOrDefault("MAX_GIT_STALENESS", 0), "Maximum time since last successful git fetch before forcing a refresh (0 disables)")
+	fs.DurationVar(&c.MaxNomadStaleness, "max-nomad-staleness", envDurationOrDefault("MAX_NOMAD_STALENESS", 0), "Maximum time since last successful Nomad diff check before forcing a refresh (0 disables)")
 
 	fs.StringVar(&c.LogLevel, "log-level", envOrDefault("LOG_LEVEL", "info"), "Log level: debug, info, warn, error")
 
