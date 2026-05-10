@@ -1,9 +1,6 @@
 # syntax=docker/dockerfile:1
 # Multi-platform build: linux/amd64 and linux/arm64 (Raspberry Pi 4+).
-# Build with:
-#   docker buildx build --platform linux/amd64,linux/arm64 \
-#     --build-arg VERSION=$(git describe --tags --always --dirty) \
-#     -t ghcr.io/gerrowadat/nomad-botherer:VERSION .
+# Build via the Makefile: make docker (local) or make docker-push (push to registry).
 
 FROM --platform=${BUILDPLATFORM} golang:1.25-alpine AS builder
 
@@ -25,7 +22,7 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
     ./cmd/nomad-botherer
 
 # ── runtime image ──────────────────────────────────────────────────────────────
-FROM alpine:3.19
+FROM alpine:3.21
 
 RUN apk add --no-cache ca-certificates tzdata && \
     addgroup -S nomad-botherer && \
