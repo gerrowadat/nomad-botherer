@@ -607,7 +607,7 @@ make build-server # compile just the server
 make build-ctl    # compile just nbctl
 make install      # go install both binaries to $GOPATH/bin
 make test         # go test -race ./...
-make test-cover   # run tests and open an HTML coverage report
+make test-cover   # run tests and generate coverage.html
 make lint         # go vet ./...
 make clean        # remove build artefacts
 ```
