@@ -392,6 +392,57 @@ func TestMetrics_AuthErrorCounted(t *testing.T) {
 	}
 }
 
+// TestListen_BindsSuccessfully verifies that Listen() returns a usable
+// net.Listener bound to a free port when given address ":0".
+func TestListen_BindsSuccessfully(t *testing.T) {
+	diffSrc := &mockDiffSource{}
+	gitSrc := &mockGitSource{}
+	reg := prometheus.NewRegistry()
+	srv := grpcserver.NewWithRegistry(testAPIKey, diffSrc, gitSrc, testBuildInfo, reg)
+
+	lis, err := srv.Listen("127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen returned error: %v", err)
+	}
+	defer lis.Close()
+
+	if lis.Addr() == nil {
+		t.Error("expected non-nil listener address")
+	}
+}
+
+// TestServe_ExitsOnContextCancel verifies that Serve() stops accepting new
+// connections and returns nil once its context is cancelled.
+func TestServe_ExitsOnContextCancel(t *testing.T) {
+	diffSrc := &mockDiffSource{}
+	gitSrc := &mockGitSource{}
+	reg := prometheus.NewRegistry()
+	srv := grpcserver.NewWithRegistry(testAPIKey, diffSrc, gitSrc, testBuildInfo, reg)
+
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan error, 1)
+	go func() {
+		done <- srv.Serve(ctx, lis)
+	}()
+
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("Serve returned unexpected error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Error("Serve did not return after context cancellation")
+	}
+}
+
 func TestMetrics_SuccessfulRequestCounted(t *testing.T) {
 	now := time.Now()
 	diffSrc := &mockDiffSource{lastCheck: now, lastCommit: "abc"}

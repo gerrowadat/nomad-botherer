@@ -665,3 +665,42 @@ func TestIndex_NotReady_Returns503(t *testing.T) {
 		t.Error("index page should show starting state when not ready")
 	}
 }
+
+// ── /metrics ──────────────────────────────────────────────────────────────────
+
+func TestMetrics_Endpoint_Returns200(t *testing.T) {
+	srv, _ := newTestServer(t, nil)
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 from /metrics, got %d", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/plain") {
+		t.Errorf("expected text/plain content-type from /metrics, got %q", ct)
+	}
+}
+
+func TestMetrics_Endpoint_ContainsBuildInfo(t *testing.T) {
+	srv, _ := newTestServer(t, nil)
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+	if !strings.Contains(body, "nomad_botherer_info") {
+		t.Error("expected nomad_botherer_info metric in /metrics output")
+	}
+}
+
+// ── Handler consistency ───────────────────────────────────────────────────────
+
+func TestHandler_ConsistentReturn(t *testing.T) {
+	srv, _ := newTestServer(t, nil)
+	h1 := srv.Handler()
+	h2 := srv.Handler()
+	if h1 != h2 {
+		t.Error("Handler() should return the same http.Handler on repeated calls")
+	}
+}
