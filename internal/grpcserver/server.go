@@ -116,7 +116,7 @@ func (s *Server) Serve(ctx context.Context, lis net.Listener) error {
 	}()
 
 	slog.Info("gRPC server listening", "addr", lis.Addr())
-	if err := srv.Serve(lis); err != nil {
+	if err := srv.Serve(lis); err != nil && err != grpc.ErrServerStopped {
 		return fmt.Errorf("grpc serve: %w", err)
 	}
 	return nil

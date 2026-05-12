@@ -670,6 +670,107 @@ func TestDiffer_ForceCheck_RunsCheck(t *testing.T) {
 	_ = diffs
 }
 
+// TestDiffer_Ready_BeforeCheck verifies that Ready() returns false before any
+// Check has completed.
+func TestDiffer_Ready_BeforeCheck(t *testing.T) {
+	d := newTestDiffer(defaultMock())
+	if d.Ready() {
+		t.Error("Ready() should return false before any Check has completed")
+	}
+}
+
+// TestDiffer_Ready_AfterCheck verifies that Ready() returns true once the first
+// Check has run.
+func TestDiffer_Ready_AfterCheck(t *testing.T) {
+	d := newTestDiffer(defaultMock())
+	if err := d.Check(map[string]string{"job.hcl": `job "test-job" {}`}, "abc"); err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if !d.Ready() {
+		t.Error("Ready() should return true after Check has completed")
+	}
+}
+
+// TestDiffer_Diffs_SnapshotIsolation verifies that mutating the slice returned
+// by Diffs() does not affect the Differ's internal state.
+func TestDiffer_Diffs_SnapshotIsolation(t *testing.T) {
+	mock := defaultMock()
+	mock.infoFn = func(jobID string, q *nomadapi.QueryOptions) (*nomadapi.Job, *nomadapi.QueryMeta, error) {
+		return nil, nil, fmt.Errorf("404: not found")
+	}
+	d := newTestDiffer(mock)
+
+	if err := d.Check(map[string]string{"job.hcl": `job "test-job" {}`}, "abc"); err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+
+	diffs1, _, _ := d.Diffs()
+	if len(diffs1) != 1 {
+		t.Fatalf("expected 1 diff, got %d", len(diffs1))
+	}
+
+	// Mutate the returned slice — the Differ's internal state must be unaffected.
+	diffs1[0] = nomad.JobDiff{JobID: "mutated"}
+
+	diffs2, _, _ := d.Diffs()
+	if len(diffs2) != 1 {
+		t.Fatalf("expected 1 diff after mutation, got %d", len(diffs2))
+	}
+	if diffs2[0].JobID != "test-job" {
+		t.Errorf("Diffs() snapshot was affected by mutation; got job ID %q, want %q", diffs2[0].JobID, "test-job")
+	}
+}
+
+// TestDiffer_EmptyJobID_Skipped verifies that a job returned by ParseHCL with
+// an empty (non-nil) job ID is silently skipped.
+func TestDiffer_EmptyJobID_Skipped(t *testing.T) {
+	mock := defaultMock()
+	emptyID := ""
+	mock.parseHCLFn = func(jobHCL string, normalize bool) (*nomadapi.Job, error) {
+		return &nomadapi.Job{ID: &emptyID}, nil
+	}
+	d := newTestDiffer(mock)
+
+	if err := d.Check(map[string]string{`job.hcl`: `job "x" {}`}, "abc"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	diffs, _, _ := d.Diffs()
+	if len(diffs) != 0 {
+		t.Errorf("empty string job ID should be skipped, got %d diffs", len(diffs))
+	}
+}
+
+// TestDiffer_ForceCheck_IncrementsStaleCounter verifies that ForceCheck
+// increments the staleness check counter metric.
+func TestDiffer_ForceCheck_IncrementsStaleCounter(t *testing.T) {
+	mock := defaultMock()
+	mock.listFn = func(q *nomadapi.QueryOptions) ([]*nomadapi.JobListStub, *nomadapi.QueryMeta, error) {
+		return nil, &nomadapi.QueryMeta{LastIndex: 42}, nil
+	}
+	reg := prometheus.NewRegistry()
+	d := newTestDifferWithRegistry(mock, reg)
+
+	if err := d.ForceCheck(map[string]string{"job.hcl": `job "test-job" {}`}, "abc"); err != nil {
+		t.Fatalf("ForceCheck: %v", err)
+	}
+
+	mfs, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+	var staleChecks float64
+	for _, mf := range mfs {
+		if mf.GetName() == "nomad_botherer_nomad_staleness_checks_total" {
+			for _, m := range mf.GetMetric() {
+				staleChecks += m.GetCounter().GetValue()
+			}
+		}
+	}
+	if staleChecks != 1 {
+		t.Errorf("expected nomad_staleness_checks_total=1 after ForceCheck, got %v", staleChecks)
+	}
+}
+
 func TestDiffer_ForceCheck_BypassesSkipOptimization(t *testing.T) {
 	// Confirm that two identical ForceCheck calls both run (the second would
 	// normally be skipped by the Raft-index optimisation, but ForceCheck must

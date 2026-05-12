@@ -391,3 +391,45 @@ func TestWatcher_ReadHCLFiles_EmptyDir(t *testing.T) {
 		t.Errorf("expected 0 files for empty dir, got %d", len(files))
 	}
 }
+
+// ── Ready ─────────────────────────────────────────────────────────────────────
+
+func TestWatcher_Ready_BeforeClone(t *testing.T) {
+	w := &Watcher{cfg: &config.Config{}}
+	if w.Ready() {
+		t.Error("Ready() should return false before repo is cloned")
+	}
+}
+
+func TestWatcher_Ready_AfterClone(t *testing.T) {
+	repo := makeTestRepo(t, map[string]string{"job.hcl": `job "x" {}`})
+	w := &Watcher{cfg: &config.Config{}, repo: repo}
+	if !w.Ready() {
+		t.Error("Ready() should return true once repo is set")
+	}
+}
+
+// ── TriggerStale metric ───────────────────────────────────────────────────────
+
+func TestWatcher_TriggerStale_IncrementsMetric(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	w := NewWithRegistry(&config.Config{PollInterval: time.Minute}, nil, reg)
+
+	w.TriggerStale()
+
+	mfs, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+	var count float64
+	for _, mf := range mfs {
+		if mf.GetName() == "nomad_botherer_git_staleness_refreshes_total" {
+			for _, m := range mf.GetMetric() {
+				count += m.GetCounter().GetValue()
+			}
+		}
+	}
+	if count != 1 {
+		t.Errorf("expected stale_refreshes_total=1 after TriggerStale, got %v", count)
+	}
+}
