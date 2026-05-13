@@ -3,13 +3,15 @@ module(
     version = "0.0.0",
 )
 
-# rules_go 0.54.0+ is required for Go 1.25 compatibility. Older releases
-# use a GoStdlib precompilation approach that fails under Go 1.25.
-bazel_dep(name = "rules_go", version = "0.54.0")
+# rules_go 0.57.0 is the first release that handles Go 1.25 correctly.
+# Earlier releases pass -installsuffix to 'go install std', which Go 1.21+
+# rejects. Use go_sdk.host() so Bazel picks up the Go already installed in
+# CI (via actions/setup-go) rather than downloading a separate copy.
+bazel_dep(name = "rules_go", version = "0.57.0")
 bazel_dep(name = "gazelle", version = "0.44.0")
 
 go_sdk = use_extension("@rules_go//go:extensions.bzl", "go_sdk")
-go_sdk.download(version = "1.25.0")
+go_sdk.host()
 
 go_deps = use_extension("@gazelle//:extensions.bzl", "go_deps")
 go_deps.from_file(go_mod = "//:go.mod")
