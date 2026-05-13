@@ -200,130 +200,213 @@ make it awkward as a default.
 
 ---
 
-## Alternative 3: Nomad job meta as distributed per-job state
+## Alternative 3: Nomad job meta as opt-in selector
 
-**How it works**
+**The pattern**
 
-Rather than storing a single centralised checkpoint, nomad-botherer records the
-GitOps state of each job *on the job itself* using Nomad's `Meta` map. Every
-registered job has a key-value `Meta` field that is stored in Nomad's state and
-returned with `Jobs.Info()`. nomad-botherer writes to this field when applying
-an update:
+Rather than nomad-botherer managing every job it finds in Git, jobs must opt in
+to GitOps management by declaring a meta key in their HCL:
 
-```json
-{
-  "Meta": {
-    "gitops.commit":      "abc1234def5678",
-    "gitops.hcl_path":    "jobs/api-server.hcl",
-    "gitops.applied_at":  "2026-05-13T10:00:00Z",
-    "gitops.status":      "succeeded"
+```hcl
+job "api-server" {
+  meta {
+    "gitops.managed" = "true"
+  }
+  # rest of job spec
+}
+```
+
+nomad-botherer reads this key from both the parsed HCL and the live job
+(`Jobs.Info()`) to decide whether to include a job in its reconciliation scope.
+A job without `gitops.managed = "true"` is skipped entirely — no diff, no
+apply, no deregister. The meta key is a scope selector, not a state store.
+
+This is a direct application of what the Nomad community calls the **Operator
+Pattern**: an external controller watches for jobs bearing a specific meta key
+and acts only on those, leaving everything else alone. It is the Nomad
+equivalent of the annotation-based opt-in used by Kubernetes controllers such as
+cert-manager (`cert-manager.io/cluster-issuer: "letsencrypt"`) or the Prometheus
+auto-discovery annotations (`prometheus.io/scrape: "true"`).
+
+**Prior art in the Nomad ecosystem**
+
+The pattern is established and in production use:
+
+- **scalad** (trivago/scalad): a horizontal autoscaler for Nomad. Jobs opt in
+  with `meta { scaler = "true" }`, then supply additional meta keys for
+  min/max counts, cooldown periods, and scaling queries. The entire scaling
+  policy lives in the job spec alongside the opt-in flag. This is the clearest
+  real-world example of the pattern.
+  (https://github.com/trivago/scalad)
+
+- **nomad-operator** (Pondidum/nomad-operator): a community-documented
+  implementation applied to automated database backups. Jobs declare
+  `meta { auto-backup = "true"; backup-schedule = "@daily" }`. The operator
+  watches the Nomad event stream for job registration events, reads the meta
+  keys, and creates or removes a backup job accordingly. This is the only
+  written description of the pattern under the name "The Operator Pattern in
+  Nomad" (Andy Dote, 2021). There is a corresponding HashiCorp Discuss thread.
+  (https://andydote.co.uk/2021/11/22/nomad-operator-pattern/,
+  https://github.com/Pondidum/nomad-operator)
+
+- **Nomad Autoscaler** (HashiCorp official): uses the same conceptual pattern
+  but resolved it with a first-class `scaling` stanza rather than the freeform
+  `meta` map. The `scaling` block has an `enabled` boolean for opt-in and a
+  `policy` map for per-job configuration — effectively the pattern promoted to
+  a named stanza in the job spec. Conceptually identical; mechanically cleaner.
+  (https://developer.hashicorp.com/nomad/tools/autoscaling/policy)
+
+Kubernetes formalised annotation-based opt-in under two conventions: labels are
+for identity and selection (controllers use `labelSelector` to query), while
+annotations carry per-object configuration. It also mandates DNS-subdomain
+prefixes (e.g., `cert-manager.io/`) to prevent key collisions between tools.
+Nomad has no equivalent formal convention. The observed practice across the
+tools above is a short tool-name prefix with a dot separator (`gitops.managed`,
+`scaler`, `auto-backup`). Key naming is worth being deliberate about: keys
+containing characters outside `[A-Za-z0-9_.]` are silently converted to
+underscores when exposed as `NOMAD_META_*` environment variables inside tasks,
+though the original form is preserved in the API response.
+
+**Separating opt-in from state storage**
+
+The version of this alternative described in earlier drafts conflated two
+distinct uses of the `Meta` map:
+
+1. **Opt-in flag** (set by humans in HCL, read by the tool): `gitops.managed =
+   "true"`. The human controls this; it lives in the HCL file and is therefore
+   version-controlled. Safe and stable.
+
+2. **Applied state** (written by the tool back into the live job): `gitops.commit
+   = "abc123"`, `gitops.applied_at = "..."`. This is where the approach breaks
+   down.
+
+When a tool writes state back into a job's meta, the live job spec diverges from
+the HCL in Git. The next time a human runs `nomad job run jobs/api-server.hcl`
+without those keys, Nomad silently removes the tool-written fields. This is the
+**meta-drift problem**: human submissions clobber tool state, and tool writes
+clobber human submissions. `jonasvinther/nomad-gitops-operator` ran into this
+directly when using meta fields to track reconciliation state and documented it
+as an open limitation. The underlying Nomad issue (#19329, "Add meta for Nomad
+Variables") remains open as of 2026.
+
+The clean resolution: use `meta` only for the opt-in flag that the human writes
+and controls; store applied state in Nomad Variables (Alternative 1).
+
+**Hybrid: meta opt-in + Variables state**
+
+```hcl
+// jobs/api-server.hcl (human-controlled, version-controlled)
+job "api-server" {
+  meta {
+    "gitops.managed" = "true"
   }
 }
 ```
 
-On startup, nomad-botherer calls `Jobs.List()` and then `Jobs.Info()` for each
-job, reads the `gitops.*` meta keys, and reconstructs which jobs have already
-been reconciled to which commit. Jobs whose `gitops.commit` matches the current
-Git HEAD and whose `gitops.status` is `succeeded` do not need to be re-applied;
-the diff check will confirm this independently via `EnforceIndex`.
+nomad-botherer behaviour with this flag:
 
-There is no checkpoint file. State is entirely distributed across the jobs
-themselves.
+- Include a job in the diff scope if and only if its HCL file or its live
+  `Jobs.Info()` response contains `meta["gitops.managed"] == "true"`.
+- Store checkpoint state in Nomad Variables (Alternative 1). Never write back
+  to the job's `meta` stanza.
+- A live job that does not have `gitops.managed` is never flagged as
+  `missing_from_hcl`, even if it has no corresponding HCL file. This prevents
+  nomad-botherer from attempting to deregister manually-registered jobs.
 
-**Handling deregistered jobs**
+**Effect on the differ**
 
-For jobs that were deregistered (`missing_from_hcl`), there is no job record to
-write meta to. The apply removes the job entirely, so there is nothing to read
-on restart. This is acceptable: on restart, `Jobs.List()` will not return the
-deregistered job, and the diff check will confirm it is absent from both Git and
-Nomad, so no action is taken.
+`Check()` changes from "compare all HCL files against all Nomad jobs" to a
+narrower scope:
 
-**Implementation sketch**
+- For HCL files: include only files whose parsed job spec has
+  `meta["gitops.managed"] == "true"`.
+- For live Nomad jobs: include only jobs with `meta["gitops.managed"] == "true"`
+  in their live spec.
+- The `missing_from_hcl` drift type becomes "a managed job (live meta has the
+  flag) has no HCL file". This is a meaningful and intentional signal, not "any
+  job not in Git".
 
-When calling `Jobs.Register()` for a GitOps update, merge the `gitops.*` meta
-keys into the job's `Meta` map before sending:
-
-```go
-func applyMeta(job *nomadapi.Job, update JobUpdate) {
-    if job.Meta == nil {
-        job.Meta = make(map[string]string)
-    }
-    job.Meta["gitops.commit"] = update.GitCommit
-    job.Meta["gitops.hcl_path"] = update.HCLFile
-    job.Meta["gitops.applied_at"] = time.Now().UTC().Format(time.RFC3339)
-    job.Meta["gitops.status"] = "succeeded"
-}
-```
-
-On startup, the reconstruction scan is a single `Jobs.List()` plus N
-`Jobs.Info()` calls, which nomad-botherer already makes for its first diff
-check. The restart cost is zero additional API calls.
+The `missingFromNomad` type changes to "an HCL file has the opt-in key but the
+job does not exist in Nomad yet". The first registration also writes
+`gitops.managed = "true"` to the live job, which is already in the HCL, so
+there is no meta drift from this write.
 
 **Pros**
 
-- Truly zero new infrastructure. State is stored in Nomad's existing job
-  records; no Variables API, no Git writes, no files on disk.
-- The checkpoint scan on startup reuses the same `Jobs.Info()` calls that the
-  first diff check makes anyway, so restart cost is exactly one diff cycle.
-- Meta fields are visible in the Nomad UI and `nomad job status` output,
-  so the GitOps commit and apply time are self-documenting on the job.
-- Works with all Nomad versions (Meta has been present since early Nomad).
-- No concurrency concerns: meta is written atomically as part of job
-  registration, using the same `EnforceIndex` CAS that prevents double-apply.
+- Operators explicitly enrol jobs. Manual jobs and legacy jobs are never
+  touched, regardless of whether they have a corresponding HCL file.
+- The opt-in key lives in the HCL file and is therefore in Git history; the
+  decision to enrol a job is auditable and reviewable.
+- The pattern is recognisable to anyone who has used scalad or the Nomad
+  Operator Pattern. It does not require explanation.
+- When combined with Nomad Variables for state (the hybrid), there is no
+  meta-drift problem and no spurious diff loops.
+- Works with all Nomad versions; no Variables API required for the opt-in
+  mechanism itself.
 
 **Cons**
 
-- Modifies the job's `Meta` map on every GitOps apply. If the HCL file defines
-  its own `meta` stanza, the GitOps keys must be merged without overwriting
-  user-defined keys. This requires care in the merge logic.
-- The next diff check will detect the `gitops.*` meta changes as a "modified"
-  diff if the HCL file does not include those keys, creating a spurious diff
-  loop. Mitigation: the differ must strip `gitops.*` meta keys from the Nomad
-  job before comparing with HCL, or the HCL author must include placeholder
-  values.
-- State for `IN_PROGRESS` updates is not stored at all; only `succeeded` is
-  written (after the fact). An `IN_PROGRESS` update that is interrupted by a
-  restart is re-derived from the diff on the next cycle, but the operator has
-  no record that an apply was attempted.
-- Deregistered jobs leave no trace. If an operator later wonders why a job is
-  not running, there is no meta record explaining that it was intentionally
-  removed by GitOps.
-- Meta values are strings; structured data (e.g., a list of failed attempts)
-  requires JSON encoding within the string value, which is fragile.
+- Every job that should be managed must have `gitops.managed = "true"` in its
+  HCL. Easy to forget; there is no directory-level default.
+- The key appears as `NOMAD_META_gitops_managed` in every allocation's
+  environment, which is minor but visible noise.
+- Nomad has no server-side filtering by meta value. nomad-botherer must list
+  all jobs and filter client-side, which is the same cost as today.
+- If a job is registered manually from an HCL file that lacks the opt-in key,
+  but the canonical HCL in Git does have it, nomad-botherer sees a `modified`
+  diff and will re-register the job with the key present. This is correct GitOps
+  behaviour but will surprise operators the first time they encounter it.
 
-**Verdict**: the most elegant option in terms of zero infrastructure, but the
-spurious-diff problem (alternatives: ignore-list logic in `Check()`, or require
-HCL authors to include meta stanza) adds non-trivial complexity to the differ.
-Best suited to environments where Nomad Variables are not available.
+**Verdict**: the opt-in pattern is the right default for production deployments
+managing a cluster shared with manually-run jobs. It should be paired with
+Alternative 1 (Nomad Variables) for state storage. The `meta` flag is a scope
+selector; it is not a checkpoint mechanism.
 
 ---
 
 ## Comparison
 
-| Property | Nomad Variables | Git state branch | Job meta |
+The three alternatives address the same problem (where to persist checkpoint
+state) but sit on different infrastructure axes. Alternative 3 is also an answer
+to a slightly different question (which jobs should be managed at all), so it
+layers on top of either of the other two rather than replacing them.
+
+| Property | Alt 1: Nomad Variables | Alt 2: Git state branch | Alt 3: meta opt-in |
 |---|---|---|---|
+| What it stores | Pending/completed updates | Pending/completed updates | Scope selector only |
 | Infrastructure | Nomad 1.4+ | Git write access | Any Nomad |
-| Durability | Raft-backed | Git history | Nomad job store |
-| Audit trail | Moderate (Variable history) | Best (full Git log) | Minimal (current meta only) |
-| Startup cost | List Variables + rehydrate | Clone state branch + read files | Reuses diff-cycle Info() calls |
-| Concurrent instances | CAS on Variable ModifyIndex | Push rejection + retry | CAS on JobModifyIndex |
-| Diff loop risk | None | None | Requires differ to strip gitops.* keys |
-| Deregister tracking | Variable deleted on success | Checkpoint file deleted | No record |
+| Durability | Raft-backed | Full Git history | N/A (opt-in flag, not state) |
+| Audit trail | Moderate | Best | N/A |
+| Startup cost | List Variables + rehydrate | Clone state branch + read files | Already paid by diff cycle |
+| Concurrent instances | CAS on Variable ModifyIndex | Push rejection + retry | N/A |
+| Diff loop risk | None | None | None (flag is in HCL, not written by tool) |
+| Deregister tracking | Variable deleted on success | Checkpoint file removed | No record |
 | Nomad version required | 1.4+ | Any | Any |
+| Prevents touching manual jobs | No | No | Yes |
 
 ---
 
 ## Recommended path
 
-Implement Alternative 1 (Nomad Variables) as the default, gated behind a config
-flag (`--checkpoint-store`, default: `nomad-variables`). Add Alternative 3 (job
-meta) as a fallback for Nomad versions before 1.4, selectable via
-`--checkpoint-store=job-meta`. Alternative 2 (Git branch) is available as an
-opt-in for teams that want the full audit trail.
+Implement the hybrid of Alternative 3 + Alternative 1:
+
+1. Gate all GitOps behaviour behind the `gitops.managed = "true"` meta opt-in
+   (Alternative 3). This scopes the operator and prevents accidental deregistration
+   of manually-managed jobs. It requires no infrastructure and works on any Nomad
+   version.
+
+2. Use Nomad Variables for checkpoint state (Alternative 1), gated behind a
+   config flag (`--checkpoint-store`, default: `nomad-variables`). This provides
+   durable, CAS-protected restart state without an external database.
+
+3. Offer Alternative 2 (Git state branch) as `--checkpoint-store=git-branch` for
+   teams that need a full audit trail and already have repo write access.
 
 The `CheckpointStore` interface above is the right abstraction boundary. Each
 alternative is an implementation of that interface; the update queue does not
-need to know which backend is active.
+need to know which backend is active. The opt-in flag is orthogonal to this
+interface and should be a config-level default (`--gitops-opt-in-key`, default:
+`gitops.managed`) so teams can rename it if they have a key naming convention.
 
 ---
 
