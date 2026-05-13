@@ -1,0 +1,26 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "nomad",
+    srcs = ["differ.go"],
+    importpath = "github.com/gerrowadat/nomad-botherer/internal/nomad",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//internal/config",
+        "@com_github_hashicorp_nomad_api//:go_default_library",
+        "@com_github_prometheus_client_golang//prometheus",
+        "@com_github_prometheus_client_golang//prometheus/promauto",
+    ],
+)
+
+# differ_internal_test.go is package nomad (internal); differ_test.go is
+# package nomad_test (external). Both go in a single go_test with embed so
+# the internal test file can access unexported symbols.
+go_test(
+    name = "nomad_test",
+    srcs = [
+        "differ_internal_test.go",
+        "differ_test.go",
+    ],
+    embed = [":nomad"],
+)

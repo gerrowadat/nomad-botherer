@@ -1,0 +1,37 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "server",
+    srcs = [
+        "render.go",
+        "server.go",
+    ],
+    importpath = "github.com/gerrowadat/nomad-botherer/internal/server",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//internal/config",
+        "//internal/nomad",
+        "@com_github_go_playground_webhooks_v6//github",
+        "@com_github_hashicorp_nomad_api//:go_default_library",
+        "@com_github_prometheus_client_golang//prometheus",
+        "@com_github_prometheus_client_golang//prometheus/promauto",
+        "@com_github_prometheus_client_golang//prometheus/promhttp",
+    ],
+)
+
+# render_internal_test.go is package server (internal); render_test.go and
+# server_test.go are package server_test (external). All three share a single
+# go_test target with embed so the internal test file can access unexported
+# symbols.
+go_test(
+    name = "server_test",
+    srcs = [
+        "render_internal_test.go",
+        "render_test.go",
+        "server_test.go",
+    ],
+    embed = [":server"],
+    deps = [
+        "@com_github_prometheus_client_golang//prometheus/testutil",
+    ],
+)

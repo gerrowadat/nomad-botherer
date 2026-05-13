@@ -72,15 +72,21 @@ The design proposals for job application and change checkpointing are in
 
 ### From source
 
-Requires Go 1.25+.
+Requires [Bazel](https://bazel.build/) or [Bazelisk](https://github.com/bazelbuild/bazelisk) (recommended). Bazelisk reads `.bazelversion` and downloads the correct Bazel version automatically.
 
 ```bash
 git clone https://github.com/gerrowadat/nomad-botherer.git
 cd nomad-botherer
 make build
-./nomad-botherer --help
-./nbctl --help
+bazel run //cmd/nomad-botherer -- --help
+bazel run //cmd/nbctl -- --help
 ```
+
+Bazel downloads Go automatically; no local Go installation is required for `bazel build` and `bazel test`. A local Go installation is still needed for `go install` and the coverage report target.
+
+Built binaries land under `bazel-bin/`:
+- `bazel-bin/cmd/nomad-botherer/nomad-botherer_/nomad-botherer`
+- `bazel-bin/cmd/nbctl/nbctl_/nbctl`
 
 ### Docker
 
@@ -217,8 +223,8 @@ go install github.com/gerrowadat/nomad-botherer/cmd/nbctl@latest
 Or built locally alongside the server:
 
 ```bash
-make build-ctl   # produces ./nbctl
-make build       # produces both ./nomad-botherer and ./nbctl
+make build-ctl   # bazel build //cmd/nbctl
+make build       # bazel build //cmd/nomad-botherer //cmd/nbctl
 ```
 
 #### Configuration
@@ -611,23 +617,50 @@ setting environment variables by hand each time.
 cp .env.example .env
 $EDITOR .env
 make build
-./nomad-botherer
+bazel run //cmd/nomad-botherer
 ```
 
 `.env` is listed in `.gitignore` and will never be committed.
 
 ### Build and test
 
+The project uses [Bazel](https://bazel.build/) as its primary build system. Install [Bazelisk](https://github.com/bazelbuild/bazelisk) and alias it to `bazel` — Bazelisk reads `.bazelversion` and manages the correct Bazel version automatically.
+
 ```bash
-make build        # compile both nomad-botherer and nbctl
-make build-server # compile just the server
-make build-ctl    # compile just nbctl
+make build        # bazel build //cmd/nomad-botherer //cmd/nbctl
+make build-server # bazel build //cmd/nomad-botherer
+make build-ctl    # bazel build //cmd/nbctl
 make install      # go install both binaries to $GOPATH/bin
-make test         # go test -race ./...
-make test-cover   # run tests and generate coverage.html
+make test         # bazel test //... (includes race detector)
+make test-cover   # go test -race ./... + generate coverage.html
 make lint         # go vet ./...
-make clean        # remove build artefacts
+make gazelle      # regenerate BUILD.bazel files from Go source
+make clean        # bazel clean + remove go test artefacts
 ```
+
+### Updating BUILD files
+
+After adding or removing imports, run gazelle to keep the BUILD files in sync:
+
+```bash
+make gazelle
+# or directly:
+bazel run //:gazelle
+```
+
+### Release builds with version stamping
+
+Development builds use the default version values (`dev` / `unknown`). To inject
+the git version, commit hash, and build timestamp into the binary, build with the
+`release` config:
+
+```bash
+bazel build --config=release //cmd/nomad-botherer //cmd/nbctl
+```
+
+This invokes `tools/workspace_status.sh` to read the current git state. The
+`install` targets (`make install-server`, `make install-ctl`) always inject
+version info via `go install -ldflags`.
 
 ### Simulating a webhook
 

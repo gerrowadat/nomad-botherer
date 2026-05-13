@@ -1,0 +1,27 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "gitwatch",
+    srcs = ["watcher.go"],
+    importpath = "github.com/gerrowadat/nomad-botherer/internal/gitwatch",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//internal/config",
+        "@com_github_go_git_go_billy_v5//memfs",
+        "@com_github_go_git_go_git_v5//:go_default_library",
+        "@com_github_go_git_go_git_v5//plumbing",
+        "@com_github_go_git_go_git_v5//plumbing/object",
+        "@com_github_go_git_go_git_v5//plumbing/transport",
+        "@com_github_go_git_go_git_v5//plumbing/transport/http",
+        "@com_github_go_git_go_git_v5//plumbing/transport/ssh",
+        "@com_github_go_git_go_git_v5//storage/memory",
+        "@com_github_prometheus_client_golang//prometheus",
+        "@com_github_prometheus_client_golang//prometheus/promauto",
+    ],
+)
+
+go_test(
+    name = "gitwatch_test",
+    srcs = ["watcher_test.go"],
+    embed = [":gitwatch"],
+)

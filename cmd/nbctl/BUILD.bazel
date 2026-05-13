@@ -1,0 +1,41 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+
+go_library(
+    name = "nbctl_lib",
+    srcs = [
+        "commands.go",
+        "root.go",
+    ],
+    importpath = "github.com/gerrowadat/nomad-botherer/cmd/nbctl",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//internal/grpcapi",
+        "@com_github_spf13_cobra//:go_default_library",
+        "@org_golang_google_grpc//:go_default_library",
+        "@org_golang_google_grpc//credentials",
+        "@org_golang_google_grpc//credentials/insecure",
+        "@org_golang_google_protobuf//encoding/protojson",
+        "@org_golang_google_protobuf//proto",
+    ],
+)
+
+go_binary(
+    name = "nbctl",
+    srcs = ["main.go"],
+    embed = [":nbctl_lib"],
+    visibility = ["//visibility:public"],
+    x_defs = {
+        "main.version": "{STABLE_VERSION}",
+    },
+)
+
+go_test(
+    name = "nbctl_test",
+    srcs = ["commands_test.go"],
+    embed = [":nbctl_lib"],
+    deps = [
+        "//internal/grpcserver",
+        "//internal/nomad",
+        "@com_github_prometheus_client_golang//prometheus",
+    ],
+)

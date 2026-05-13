@@ -1,10 +1,12 @@
 BINARY     := nomad-botherer
 CTL_BINARY := nbctl
 MODULE     := github.com/gerrowadat/nomad-botherer
-CMD        := ./cmd/nomad-botherer
-CTL_CMD    := ./cmd/nbctl
 
-# Version is derived from the most recent git tag; falls back to "dev".
+IMAGE      ?= ghcr.io/gerrowadat/$(BINARY)
+PLATFORMS  := linux/amd64,linux/arm64
+
+# Version variables — used only by the 'install' targets (go install).
+# Bazel release builds use tools/workspace_status.sh via --config=release.
 VERSION    ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 COMMIT     := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 BUILDDATE  := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -16,40 +18,41 @@ LDFLAGS    := -X main.version=$(VERSION) \
 
 CTL_LDFLAGS := -X main.version=$(VERSION) -s -w
 
-IMAGE      ?= ghcr.io/gerrowadat/$(BINARY)
-PLATFORMS  := linux/amd64,linux/arm64
-
-.PHONY: all build build-server build-ctl install install-server install-ctl test lint generate clean docker docker-push release-patch release-minor release-major version
+.PHONY: all build build-server build-ctl install install-server install-ctl \
+        test test-cover lint gazelle generate clean \
+        docker docker-push \
+        release-patch release-minor release-major version
 
 all: build
 
-## build: compile both binaries for the current platform
-build: build-server build-ctl
+## build: build both binaries with Bazel
+build:
+	bazel build //cmd/nomad-botherer //cmd/nbctl
 
-## build-server: compile the nomad-botherer server
+## build-server: build the nomad-botherer server
 build-server:
-	go build -ldflags "$(LDFLAGS)" -o $(BINARY) $(CMD)
+	bazel build //cmd/nomad-botherer
 
-## build-ctl: compile the nbctl CLI
+## build-ctl: build the nbctl CLI
 build-ctl:
-	go build -ldflags "$(CTL_LDFLAGS)" -o $(CTL_BINARY) $(CTL_CMD)
+	bazel build //cmd/nbctl
 
-## install: install both binaries to $GOPATH/bin (or go install equivalent)
+## install: install both binaries to $GOPATH/bin using go install
 install: install-server install-ctl
 
 ## install-server: go install the server binary
 install-server:
-	go install -ldflags "$(LDFLAGS)" $(CMD)
+	go install -ldflags "$(LDFLAGS)" ./cmd/nomad-botherer
 
 ## install-ctl: go install the nbctl binary
 install-ctl:
-	go install -ldflags "$(CTL_LDFLAGS)" $(CTL_CMD)
+	go install -ldflags "$(CTL_LDFLAGS)" ./cmd/nbctl
 
-## test: run all tests
+## test: run all tests with Bazel (includes race detector)
 test:
-	go test -race -timeout 60s ./...
+	bazel test //...
 
-## test-cover: run tests with coverage report
+## test-cover: run tests and generate a coverage report (uses go test for coverage output format)
 test-cover:
 	go test -race -timeout 60s -coverprofile=coverage.out ./...
 	go tool cover -html=coverage.out -o coverage.html
@@ -57,6 +60,10 @@ test-cover:
 ## lint: run go vet
 lint:
 	go vet ./...
+
+## gazelle: regenerate BUILD.bazel files from Go source
+gazelle:
+	bazel run //:gazelle
 
 # Pinned tool versions — must match the versions recorded in the generated file headers.
 BUF_VERSION                := v1.68.4
@@ -70,15 +77,18 @@ generate:
 	go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@$(PROTOC_GEN_GO_GRPC_VERSION)
 	buf generate
 
-## clean: remove build artefacts
+## clean: remove Bazel and go test build artefacts
 clean:
-	rm -f $(BINARY) $(CTL_BINARY) coverage.out coverage.html
+	bazel clean
+	rm -f coverage.out coverage.html
 
 ## version: print the current version
 version:
 	@echo $(VERSION)
 
 # ── Docker ──────────────────────────────────────────────────────────────────────
+# Docker builds use go build directly inside the Dockerfile for simplicity.
+# Bazel is used for local development and CI.
 
 ## docker: build a multi-platform image (requires docker buildx)
 docker:

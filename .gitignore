@@ -5,6 +5,9 @@
 /nomad-botherer
 /nbctl
 
+# Bazel symlinks created in the workspace root
+/bazel-*
+
 # Binaries for programs and plugins
 *.exe
 *.exe~

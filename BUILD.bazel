@@ -1,0 +1,4 @@
+load("@gazelle//:def.bzl", "gazelle")
+
+# gazelle:prefix github.com/gerrowadat/nomad-botherer
+gazelle(name = "gazelle")

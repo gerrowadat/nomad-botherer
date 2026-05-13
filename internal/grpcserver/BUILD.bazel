@@ -1,0 +1,35 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "grpcserver",
+    srcs = ["server.go"],
+    importpath = "github.com/gerrowadat/nomad-botherer/internal/grpcserver",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//internal/grpcapi",
+        "//internal/nomad",
+        "@com_github_prometheus_client_golang//prometheus",
+        "@com_github_prometheus_client_golang//prometheus/promauto",
+        "@org_golang_google_grpc//:go_default_library",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//metadata",
+        "@org_golang_google_grpc//status",
+    ],
+)
+
+# server_test.go is package grpcserver_test (external), so no embed.
+go_test(
+    name = "grpcserver_test",
+    srcs = ["server_test.go"],
+    deps = [
+        "//internal/grpcapi",
+        "//internal/grpcserver",
+        "//internal/nomad",
+        "@com_github_prometheus_client_golang//prometheus",
+        "@org_golang_google_grpc//:go_default_library",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//credentials/insecure",
+        "@org_golang_google_grpc//metadata",
+        "@org_golang_google_grpc//status",
+    ],
+)

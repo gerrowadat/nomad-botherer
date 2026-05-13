@@ -15,18 +15,27 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set up Bazel
+        uses: bazel-contrib/setup-bazel@0.9.1
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}
+          repository-cache: true
+
+      - name: Test
+        run: bazel test //...
+
+      # Coverage report uses go test because Bazel's LCOV output is not
+      # compatible with the go-coverage-report action.
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
           cache: true
 
-      - name: Vet
-        run: go vet ./...
-
-      - name: Test
+      - name: Coverage report
         run: go test -race -timeout 60s -coverprofile=coverage.out -covermode=atomic ./...
 
-      - name: Coverage report
+      - name: Upload coverage
         uses: ncruces/go-coverage-report@v0
         with:
           coverage-file: coverage.out

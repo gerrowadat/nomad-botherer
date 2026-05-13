@@ -1,0 +1,13 @@
+# Bzlmod is the default in Bazel 7; kept explicit for clarity.
+common --enable_bzlmod
+
+# Workspace stamping injects git version info into binaries.
+# Used automatically when --config=release is passed.
+build:release --stamp
+build:release --workspace_status_command=tools/workspace_status.sh
+
+# Run tests with the race detector, matching 'go test -race'.
+test --@rules_go//go/config:race
+
+# Print full output for failing tests rather than just the summary.
+test --test_output=errors
