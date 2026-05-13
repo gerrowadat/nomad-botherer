@@ -17,7 +17,8 @@ jobs:
 
       - name: Install Bazelisk
         run: |
-          npm install -g @bazel/bazelisk
+          curl -fsSL "https://github.com/bazelbuild/bazelisk/releases/latest/download/bazelisk-linux-amd64" -o /tmp/bazelisk
+          sudo install -m 755 /tmp/bazelisk /usr/local/bin/bazel
           bazel version
 
       - name: Test
