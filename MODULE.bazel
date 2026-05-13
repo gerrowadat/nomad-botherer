@@ -3,11 +3,14 @@ module(
     version = "0.0.0",
 )
 
-bazel_dep(name = "rules_go", version = "0.50.1")
-bazel_dep(name = "gazelle", version = "0.40.0")
+bazel_dep(name = "rules_go", version = "0.46.0")
+bazel_dep(name = "gazelle", version = "0.38.0")
 
+# Use the Go toolchain installed by the CI runner (actions/setup-go) or the
+# developer's local Go installation. This avoids hardcoding a Go download URL
+# that may not yet be in the rules_go SDK manifest.
 go_sdk = use_extension("@rules_go//go:extensions.bzl", "go_sdk")
-go_sdk.download(version = "1.25.0")
+go_sdk.host()
 
 go_deps = use_extension("@gazelle//:extensions.bzl", "go_deps")
 go_deps.from_file(go_mod = "//:go.mod")
