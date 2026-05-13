@@ -1,0 +1,30 @@
+name: Proto check
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  proto-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install protobuf tools
+        run: |
+          go install github.com/bufbuild/buf/cmd/buf@v1.68.4
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11
+          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.1
+
+      - name: Regenerate protobuf
+        run: buf generate
+
+      - name: Check generated files are up to date
+        run: git diff --exit-code internal/grpcapi/
