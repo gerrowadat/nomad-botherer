@@ -19,7 +19,7 @@ CTL_LDFLAGS := -X main.version=$(VERSION) -s -w
 IMAGE      ?= ghcr.io/gerrowadat/$(BINARY)
 PLATFORMS  := linux/amd64,linux/arm64
 
-.PHONY: all build build-server build-ctl install install-server install-ctl test lint clean docker docker-push release-patch release-minor release-major version
+.PHONY: all build build-server build-ctl install install-server install-ctl test lint generate clean docker docker-push release-patch release-minor release-major version
 
 all: build
 
@@ -57,6 +57,20 @@ test-cover:
 ## lint: run go vet
 lint:
 	go vet ./...
+
+# Pinned tool versions — must match the versions recorded in the generated file headers.
+PROTOC_GEN_GO_VERSION      := v1.36.11
+PROTOC_GEN_GO_GRPC_VERSION := v1.6.1
+
+## generate: regenerate protobuf code from proto/nomad_botherer.proto
+generate:
+	go install google.golang.org/protobuf/cmd/protoc-gen-go@$(PROTOC_GEN_GO_VERSION)
+	go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@$(PROTOC_GEN_GO_GRPC_VERSION)
+	protoc \
+		--go_out=. --go_opt=module=$(MODULE) \
+		--go-grpc_out=. --go-grpc_opt=module=$(MODULE) \
+		-I proto \
+		proto/nomad_botherer.proto
 
 ## clean: remove build artefacts
 clean:
