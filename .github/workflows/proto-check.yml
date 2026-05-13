@@ -18,10 +18,13 @@ jobs:
           cache: true
 
       - name: Install protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          version: "3.21.12"
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
+        env:
+          PROTOC_VERSION: "3.21.12"
+        run: |
+          curl -fsSL -o /tmp/protoc.zip \
+            "https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/protoc-${PROTOC_VERSION}-linux-x86_64.zip"
+          unzip -q /tmp/protoc.zip -d /tmp/protoc
+          sudo install -m 755 /tmp/protoc/bin/protoc /usr/local/bin/protoc
 
       - name: Regenerate protobuf
         run: make generate
