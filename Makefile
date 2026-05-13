@@ -59,18 +59,16 @@ lint:
 	go vet ./...
 
 # Pinned tool versions — must match the versions recorded in the generated file headers.
+BUF_VERSION                := v1.68.4
 PROTOC_GEN_GO_VERSION      := v1.36.11
 PROTOC_GEN_GO_GRPC_VERSION := v1.6.1
 
 ## generate: regenerate protobuf code from proto/nomad_botherer.proto
 generate:
+	go install github.com/bufbuild/buf/cmd/buf@$(BUF_VERSION)
 	go install google.golang.org/protobuf/cmd/protoc-gen-go@$(PROTOC_GEN_GO_VERSION)
 	go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@$(PROTOC_GEN_GO_GRPC_VERSION)
-	protoc \
-		--go_out=. --go_opt=module=$(MODULE) \
-		--go-grpc_out=. --go-grpc_opt=module=$(MODULE) \
-		-I proto \
-		proto/nomad_botherer.proto
+	buf generate
 
 ## clean: remove build artefacts
 clean:

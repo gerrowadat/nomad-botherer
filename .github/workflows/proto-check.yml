@@ -17,17 +17,14 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Install protoc
-        env:
-          PROTOC_VERSION: "3.21.12"
+      - name: Install protobuf tools
         run: |
-          curl -fsSL -o /tmp/protoc.zip \
-            "https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/protoc-${PROTOC_VERSION}-linux-x86_64.zip"
-          unzip -q /tmp/protoc.zip -d /tmp/protoc
-          sudo install -m 755 /tmp/protoc/bin/protoc /usr/local/bin/protoc
+          go install github.com/bufbuild/buf/cmd/buf@v1.68.4
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11
+          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.1
 
       - name: Regenerate protobuf
-        run: make generate
+        run: buf generate
 
       - name: Check generated files are up to date
         run: git diff --exit-code internal/grpcapi/
