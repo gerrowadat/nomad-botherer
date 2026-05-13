@@ -3,14 +3,13 @@ module(
     version = "0.0.0",
 )
 
-bazel_dep(name = "rules_go", version = "0.50.1")
-bazel_dep(name = "gazelle", version = "0.40.0")
+# rules_go 0.52.0+ is required for Go 1.25 compatibility. Older releases
+# pass -installsuffix to 'go install std', a flag Go 1.25 removed.
+bazel_dep(name = "rules_go", version = "0.52.0")
+bazel_dep(name = "gazelle", version = "0.42.0")
 
-# Use the Go toolchain installed by the CI runner (actions/setup-go) or the
-# developer's local Go installation. GOTOOLCHAIN=local in .bazelrc prevents
-# Go 1.21+ toolchain version negotiation inside the Bazel sandbox.
 go_sdk = use_extension("@rules_go//go:extensions.bzl", "go_sdk")
-go_sdk.host()
+go_sdk.download(version = "1.25.0")
 
 go_deps = use_extension("@gazelle//:extensions.bzl", "go_deps")
 go_deps.from_file(go_mod = "//:go.mod")

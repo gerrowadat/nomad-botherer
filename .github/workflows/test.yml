@@ -15,13 +15,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Set up Go before Bazel so that go_sdk.host() in MODULE.bazel picks
-      # up the correct version from the runner's PATH.
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: true
-
       - name: Install Bazelisk
         run: |
           curl -fsSL "https://github.com/bazelbuild/bazelisk/releases/latest/download/bazelisk-linux-amd64" -o /tmp/bazelisk
@@ -33,6 +26,11 @@ jobs:
 
       # Coverage report uses go test because Bazel's LCOV output is not
       # compatible with the go-coverage-report action.
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
       - name: Coverage report
         run: go test -race -timeout 60s -coverprofile=coverage.out -covermode=atomic ./...
 
