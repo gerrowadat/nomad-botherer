@@ -1,6 +1,10 @@
 # Bzlmod is the default in Bazel 7; kept explicit for clarity.
 common --enable_bzlmod
 
+# Prevent Go 1.21+ toolchain version negotiation inside the Bazel sandbox.
+# Without this, Go may try to download a different toolchain and fail.
+build --action_env=GOTOOLCHAIN=local
+
 # Workspace stamping injects git version info into binaries.
 # Used automatically when --config=release is passed.
 build:release --stamp
