@@ -15,12 +15,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Bazel
-        uses: bazel-contrib/setup-bazel@0.9.1
-        with:
-          bazelisk-cache: true
-          disk-cache: ${{ github.workflow }}
-          repository-cache: true
+      - name: Install Bazelisk
+        run: |
+          npm install -g @bazel/bazelisk
+          bazel version
 
       - name: Test
         run: bazel test //...
