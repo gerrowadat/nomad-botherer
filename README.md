@@ -17,6 +17,7 @@ Three kinds of drift are tracked:
 
 ## Contents
 
+- [Design and prior art](#design-and-prior-art)
 - [How it works](#how-it-works)
 - [Installation](#installation)
 - [Quick start](#quick-start)
@@ -33,6 +34,22 @@ Three kinds of drift are tracked:
   - [Sample Prometheus configuration](#sample-prometheus-configuration)
 - [Docker](#docker)
 - [Development](#development)
+
+---
+
+## Design and prior art
+
+nomad-botherer is currently a **drift detector only** — it observes and reports
+differences between Git and a live Nomad cluster but does not apply changes.
+Job application (GitOps-style reconciliation) is planned but not yet implemented.
+
+[`docs/prior-art.md`](docs/prior-art.md) surveys the existing Nomad GitOps
+tooling (nomad-gitops-operator, nomad-ops, Levant, Waypoint), explains what each
+does and where each falls short, and describes the design decisions that will
+guide the apply side of nomad-botherer when it is built.
+
+The design proposals for job application and change checkpointing are in
+[`docs/proposals/`](docs/proposals/).
 
 ---
 
