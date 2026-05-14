@@ -15,8 +15,15 @@ import (
 	"github.com/gerrowadat/nomad-botherer/internal/grpcapi"
 )
 
-// Injected at build time via -ldflags.
+// Injected at build time via -ldflags (go install) or Bazel x_defs (--config=release).
+// Bazel sets this to empty string when building without --config=release.
 var version = "dev"
+
+func init() {
+	if version == "" {
+		version = "dev"
+	}
+}
 
 type rootConfig struct {
 	server  string

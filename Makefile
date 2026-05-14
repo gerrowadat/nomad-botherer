@@ -5,8 +5,8 @@ MODULE     := github.com/gerrowadat/nomad-botherer
 IMAGE      ?= ghcr.io/gerrowadat/$(BINARY)
 PLATFORMS  := linux/amd64,linux/arm64
 
-# Version variables — used only by the 'install' targets (go install).
-# Bazel release builds use tools/workspace_status.sh via --config=release.
+# Version variables — used by 'install' targets (go install), Docker build args,
+# and the 'version' target. Bazel release builds use tools/workspace_status.sh.
 VERSION    ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 COMMIT     := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 BUILDDATE  := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -61,9 +61,10 @@ test-cover:
 lint:
 	go vet ./...
 
-## gazelle: regenerate BUILD.bazel files from Go source
+## gazelle: regenerate BUILD.bazel files and sync MODULE.bazel use_repo list
 gazelle:
 	bazel run //:gazelle
+	bazel mod tidy
 
 # Pinned tool versions — must match the versions recorded in the generated file headers.
 BUF_VERSION                := v1.68.4
@@ -81,6 +82,7 @@ generate:
 clean:
 	bazel clean
 	rm -f coverage.out coverage.html
+	rm -f nomad-botherer nbctl
 
 ## version: print the current version
 version:

@@ -16,20 +16,30 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Bazelisk
+        env:
+          BAZELISK_VERSION: "v1.29.0"
+          BAZELISK_SHA256: "5a408715e932c0250d28bd84555f12edbf70117de42f9181691c736eacc4a992"
         run: |
-          curl -fsSL "https://github.com/bazelbuild/bazelisk/releases/latest/download/bazelisk-linux-amd64" -o /tmp/bazelisk
+          curl -fsSL "https://github.com/bazelbuild/bazelisk/releases/download/${BAZELISK_VERSION}/bazelisk-linux-amd64" -o /tmp/bazelisk
+          echo "${BAZELISK_SHA256}  /tmp/bazelisk" | sha256sum -c
           sudo install -m 755 /tmp/bazelisk /usr/local/bin/bazel
           bazel version
+
+      - name: Build
+        run: bazel build //cmd/nomad-botherer //cmd/nbctl
 
       - name: Test
         run: bazel test //...
 
-      # Coverage report uses go test because Bazel's LCOV output is not
-      # compatible with the go-coverage-report action.
+      # setup-go is needed for go vet, coverage report, and the go-coverage-report
+      # action. Bazel's LCOV output is not compatible with go-coverage-report.
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
           cache: true
+
+      - name: Vet
+        run: go vet ./...
 
       - name: Coverage report
         run: go test -race -timeout 60s -coverprofile=coverage.out -covermode=atomic ./...

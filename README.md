@@ -82,7 +82,7 @@ bazel run //cmd/nomad-botherer -- --help
 bazel run //cmd/nbctl -- --help
 ```
 
-Bazel downloads Go automatically; no local Go installation is required for `bazel build` and `bazel test`. A local Go installation is still needed for `go install` and the coverage report target.
+Bazel downloads Go automatically; no local Go installation is required for `bazel build` and `bazel test`. A local Go installation is still needed for `go install`, `make lint` (`go vet ./...`), `make generate` (installs protobuf tools via `go install`), and the coverage report target.
 
 Built binaries land under `bazel-bin/`:
 - `bazel-bin/cmd/nomad-botherer/nomad-botherer_/nomad-botherer`
@@ -100,10 +100,20 @@ Pre-built images are available for `linux/amd64` and `linux/arm64` (Raspberry Pi
 
 ## Quick start
 
+Run directly via Bazel (no install step needed):
+
+```bash
+bazel run //cmd/nomad-botherer -- \
+  --repo-url https://github.com/myorg/nomad-jobs.git \
+  --nomad-addr http://nomad.example.com:4646
+```
+
+Or install to `$GOPATH/bin` first with `make install`, then use `nomad-botherer` on the command line:
+
 **Public repo, Nomad without ACLs:**
 
 ```bash
-./nomad-botherer \
+nomad-botherer \
   --repo-url https://github.com/myorg/nomad-jobs.git \
   --nomad-addr http://nomad.example.com:4646
 ```
@@ -113,7 +123,7 @@ Pre-built images are available for `linux/amd64` and `linux/arm64` (Raspberry Pi
 ```bash
 export GIT_TOKEN=ghp_...
 export NOMAD_TOKEN=...
-./nomad-botherer \
+nomad-botherer \
   --repo-url https://github.com/myorg/nomad-jobs.git \
   --nomad-addr http://nomad.example.com:4646 \
   --hcl-dir jobs
@@ -122,7 +132,7 @@ export NOMAD_TOKEN=...
 **Private repo via SSH key:**
 
 ```bash
-./nomad-botherer \
+nomad-botherer \
   --repo-url git@github.com:myorg/nomad-jobs.git \
   --git-ssh-key ~/.ssh/id_ed25519 \
   --nomad-addr http://nomad.example.com:4646
@@ -640,12 +650,13 @@ make clean        # bazel clean + remove go test artefacts
 
 ### Updating BUILD files
 
-After adding or removing imports, run gazelle to keep the BUILD files in sync:
+After adding or removing imports, run gazelle to keep the BUILD files in sync. If you added a new external Go module dependency, also run `bazel mod tidy` to update the `use_repo(...)` list in `MODULE.bazel`; `make gazelle` does both:
 
 ```bash
 make gazelle
 # or directly:
 bazel run //:gazelle
+bazel mod tidy
 ```
 
 ### Release builds with version stamping

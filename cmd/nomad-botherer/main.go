@@ -17,12 +17,26 @@ import (
 	"github.com/gerrowadat/nomad-botherer/internal/server"
 )
 
-// Injected at build time via -ldflags.
+// Injected at build time via -ldflags (go install) or Bazel x_defs (--config=release).
+// Bazel sets these to empty string when building without --config=release; the init
+// function restores the defaults in that case.
 var (
 	version   = "dev"
 	commit    = "unknown"
 	buildDate = "unknown"
 )
+
+func init() {
+	if version == "" {
+		version = "dev"
+	}
+	if commit == "" {
+		commit = "unknown"
+	}
+	if buildDate == "" {
+		buildDate = "unknown"
+	}
+}
 
 func main() {
 	// Load .env for local development. Non-fatal if the file is absent.
