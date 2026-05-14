@@ -5,10 +5,6 @@ common --enable_bzlmod
 # Without this, Go may try to download a different toolchain and fail.
 build --action_env=GOTOOLCHAIN=local
 
-# Disable CGO for all builds. This project has no C dependencies and CGO
-# causes the GoStdlib precompilation step to fail under Go 1.25 in CI.
-build --@rules_go//go/config:pure=true
-
 # Workspace stamping injects git version info into binaries.
 # Used automatically when --config=release is passed.
 build:release --stamp
