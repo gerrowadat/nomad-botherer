@@ -5,6 +5,7 @@ package nomad
 import (
 	"fmt"
 	"log/slog"
+	"path"
 	"regexp"
 	"strings"
 	"sync"
@@ -64,6 +65,8 @@ type Differ struct {
 	jobs            NomadJobsClient
 	namespace       string
 	includeDeadJobs bool
+	jobSelectorGlob   string
+	managedMetaPrefix string
 
 	mu              sync.RWMutex
 	diffs           []JobDiff
@@ -72,25 +75,28 @@ type Differ struct {
 	lastNomadIndex  uint64            // Raft index from the last successful List(); protected by mu
 	driftFirstSeen  map[string]time.Time // key: driftKey(jobID, diffType); protected by mu
 
-	hclParseErrors    prometheus.Counter
-	hclFilesSkipped   prometheus.Counter
-	diffChecks        prometheus.Counter
-	diffChecksSkipped prometheus.Counter
-	staleChecks       prometheus.Counter
-	nomadAPIErrors    *prometheus.CounterVec
-	lastCheck         prometheus.Gauge
-	jobDiffs          *prometheus.GaugeVec
-	driftedJobs       *prometheus.GaugeVec
-	jobDriftSince     *prometheus.GaugeVec
+	hclParseErrors      prometheus.Counter
+	hclFilesSkipped     prometheus.Counter
+	diffChecks          prometheus.Counter
+	diffChecksSkipped   prometheus.Counter
+	staleChecks         prometheus.Counter
+	jobsSkippedBySel    *prometheus.CounterVec
+	nomadAPIErrors      *prometheus.CounterVec
+	lastCheck           prometheus.Gauge
+	jobDiffs            *prometheus.GaugeVec
+	driftedJobs         *prometheus.GaugeVec
+	jobDriftSince       *prometheus.GaugeVec
 }
 
 // newDifferBase constructs a Differ with metrics registered into reg.
-func newDifferBase(jobs NomadJobsClient, namespace string, includeDeadJobs bool, reg prometheus.Registerer) *Differ {
+func newDifferBase(jobs NomadJobsClient, namespace string, includeDeadJobs bool, jobSelectorGlob, managedMetaPrefix string, reg prometheus.Registerer) *Differ {
 	f := promauto.With(reg)
 	return &Differ{
-		jobs:            jobs,
-		namespace:       namespace,
-		includeDeadJobs: includeDeadJobs,
+		jobs:              jobs,
+		namespace:         namespace,
+		includeDeadJobs:   includeDeadJobs,
+		jobSelectorGlob:   jobSelectorGlob,
+		managedMetaPrefix: managedMetaPrefix,
 		driftFirstSeen:  make(map[string]time.Time),
 		hclParseErrors: f.NewCounter(prometheus.CounterOpts{
 			Name: "nomad_botherer_hcl_parse_errors_total",
@@ -112,6 +118,10 @@ func newDifferBase(jobs NomadJobsClient, namespace string, includeDeadJobs bool,
 			Name: "nomad_botherer_nomad_staleness_checks_total",
 			Help: "Total number of Nomad diff checks triggered by the staleness check.",
 		}),
+		jobsSkippedBySel: f.NewCounterVec(prometheus.CounterOpts{
+			Name: "nomad_botherer_jobs_skipped_by_selector_total",
+			Help: "Total number of jobs skipped because they did not match the configured selection criteria, by source (hcl or nomad).",
+		}, []string{"source"}),
 		nomadAPIErrors: f.NewCounterVec(prometheus.CounterOpts{
 			Name: "nomad_botherer_nomad_api_errors_total",
 			Help: "Total number of Nomad API errors by operation.",
@@ -148,18 +158,34 @@ func NewDiffer(cfg *config.Config) (*Differ, error) {
 		return nil, fmt.Errorf("creating nomad client: %w", err)
 	}
 
-	return newDifferBase(client.Jobs(), cfg.NomadNamespace, cfg.IncludeDeadJobs, prometheus.DefaultRegisterer), nil
+	return newDifferBase(client.Jobs(), cfg.NomadNamespace, cfg.IncludeDeadJobs, cfg.JobSelectorGlob, cfg.ManagedMetaPrefix, prometheus.DefaultRegisterer), nil
 }
 
 // NewWithClient creates a Differ with a custom jobs client, intended for tests.
 func NewWithClient(cfg *config.Config, jobs NomadJobsClient) *Differ {
-	return newDifferBase(jobs, cfg.NomadNamespace, cfg.IncludeDeadJobs, prometheus.NewRegistry())
+	return newDifferBase(jobs, cfg.NomadNamespace, cfg.IncludeDeadJobs, cfg.JobSelectorGlob, cfg.ManagedMetaPrefix, prometheus.NewRegistry())
 }
 
 // NewWithClientAndRegistry creates a Differ with a custom jobs client and Prometheus
 // registry. Use this in tests that need to inspect metric values.
 func NewWithClientAndRegistry(cfg *config.Config, jobs NomadJobsClient, reg prometheus.Registerer) *Differ {
-	return newDifferBase(jobs, cfg.NomadNamespace, cfg.IncludeDeadJobs, reg)
+	return newDifferBase(jobs, cfg.NomadNamespace, cfg.IncludeDeadJobs, cfg.JobSelectorGlob, cfg.ManagedMetaPrefix, reg)
+}
+
+// jobIsSelected reports whether a job should be watched. A job is selected when
+// its ID matches the configured glob pattern, or when its meta map contains
+// "<managedMetaPrefix>.managed" set to "true". If both are empty, no jobs
+// are selected.
+func (d *Differ) jobIsSelected(jobID string, meta map[string]string) bool {
+	if d.jobSelectorGlob != "" {
+		if matched, _ := path.Match(d.jobSelectorGlob, jobID); matched {
+			return true
+		}
+	}
+	if d.managedMetaPrefix != "" && meta[d.managedMetaPrefix+".managed"] == "true" {
+		return true
+	}
+	return false
 }
 
 // Check compares the given HCL files (path → content) against the live Nomad
@@ -215,6 +241,11 @@ func (d *Differ) Check(hclFiles map[string]string, commit string) error {
 			continue
 		}
 		jobID := *job.ID
+		if !d.jobIsSelected(jobID, job.Meta) {
+			slog.Debug("Skipping job not matching selection criteria", "job", jobID, "file", filename)
+			d.jobsSkippedBySel.WithLabelValues("hcl").Inc()
+			continue
+		}
 		hclJobs[jobID] = job
 		hclJobFile[jobID] = filename
 		slog.Debug("Parsed HCL file", "file", filename, "job_id", jobID)
@@ -277,8 +308,13 @@ func (d *Differ) Check(hclFiles map[string]string, commit string) error {
 	// Find jobs in Nomad that have no corresponding HCL file.
 	// Dead jobs are skipped unless --include-dead-jobs is set, since a dead
 	// job without HCL is expected (it was stopped intentionally).
+	// Only jobs that match the configured selection criteria are considered managed.
 	for _, j := range allJobs {
 		if !d.includeDeadJobs && j.Status == "dead" {
+			continue
+		}
+		if !d.jobIsSelected(j.ID, j.Meta) {
+			d.jobsSkippedBySel.WithLabelValues("nomad").Inc()
 			continue
 		}
 		if _, ok := hclJobs[j.ID]; !ok {

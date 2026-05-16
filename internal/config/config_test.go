@@ -110,6 +110,7 @@ func TestLoadFromArgs_Defaults(t *testing.T) {
 	for _, k := range []string{
 		"GIT_REPO_URL", "GIT_BRANCH", "NOMAD_ADDR", "NOMAD_NAMESPACE",
 		"LISTEN_ADDR", "WEBHOOK_PATH", "LOG_LEVEL", "POLL_INTERVAL", "DIFF_INTERVAL",
+		"JOB_SELECTOR_GLOB", "MANAGED_META_PREFIX",
 	} {
 		os.Unsetenv(k)
 	}
@@ -130,6 +131,8 @@ func TestLoadFromArgs_Defaults(t *testing.T) {
 		{"ListenAddr", cfg.ListenAddr, ":8080"},
 		{"WebhookPath", cfg.WebhookPath, "/webhook"},
 		{"LogLevel", cfg.LogLevel, "info"},
+		{"JobSelectorGlob", cfg.JobSelectorGlob, ""},
+		{"ManagedMetaPrefix", cfg.ManagedMetaPrefix, "gitops"},
 	}
 	for _, c := range checks {
 		if c.got != c.want {
@@ -397,5 +400,93 @@ func TestLoadFromArgs_GRPCDisabled(t *testing.T) {
 	}
 	if cfg.GRPCListenAddr != "" {
 		t.Errorf("GRPCListenAddr: want empty (disabled), got %q", cfg.GRPCListenAddr)
+	}
+}
+
+func TestLoadFromArgs_ManagedMetaPrefixDefault(t *testing.T) {
+	os.Unsetenv("MANAGED_META_PREFIX")
+	cfg, err := LoadFromArgs(newFS(), []string{"--repo-url", "https://example.com/r.git"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.ManagedMetaPrefix != "gitops" {
+		t.Errorf("ManagedMetaPrefix: want gitops, got %q", cfg.ManagedMetaPrefix)
+	}
+}
+
+func TestLoadFromArgs_ManagedMetaPrefixFlag(t *testing.T) {
+	os.Unsetenv("MANAGED_META_PREFIX")
+	cfg, err := LoadFromArgs(newFS(), []string{
+		"--repo-url", "https://example.com/r.git",
+		"--managed-meta-prefix", "myorg",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.ManagedMetaPrefix != "myorg" {
+		t.Errorf("ManagedMetaPrefix: want myorg, got %q", cfg.ManagedMetaPrefix)
+	}
+}
+
+func TestLoadFromArgs_ManagedMetaPrefixEnv(t *testing.T) {
+	os.Setenv("MANAGED_META_PREFIX", "acme")
+	t.Cleanup(func() { os.Unsetenv("MANAGED_META_PREFIX") })
+	cfg, err := LoadFromArgs(newFS(), []string{"--repo-url", "https://example.com/r.git"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.ManagedMetaPrefix != "acme" {
+		t.Errorf("ManagedMetaPrefix: want acme, got %q", cfg.ManagedMetaPrefix)
+	}
+}
+
+func TestLoadFromArgs_ManagedMetaPrefixEmpty(t *testing.T) {
+	os.Unsetenv("MANAGED_META_PREFIX")
+	cfg, err := LoadFromArgs(newFS(), []string{
+		"--repo-url", "https://example.com/r.git",
+		"--managed-meta-prefix", "",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.ManagedMetaPrefix != "" {
+		t.Errorf("ManagedMetaPrefix: want empty (disabled), got %q", cfg.ManagedMetaPrefix)
+	}
+}
+
+func TestLoadFromArgs_JobSelectorGlobDefault(t *testing.T) {
+	os.Unsetenv("JOB_SELECTOR_GLOB")
+	cfg, err := LoadFromArgs(newFS(), []string{"--repo-url", "https://example.com/r.git"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.JobSelectorGlob != "" {
+		t.Errorf("JobSelectorGlob: want empty (no glob), got %q", cfg.JobSelectorGlob)
+	}
+}
+
+func TestLoadFromArgs_JobSelectorGlobFlag(t *testing.T) {
+	os.Unsetenv("JOB_SELECTOR_GLOB")
+	cfg, err := LoadFromArgs(newFS(), []string{
+		"--repo-url", "https://example.com/r.git",
+		"--job-selector-glob", "prod-*",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.JobSelectorGlob != "prod-*" {
+		t.Errorf("JobSelectorGlob: want prod-*, got %q", cfg.JobSelectorGlob)
+	}
+}
+
+func TestLoadFromArgs_JobSelectorGlobEnv(t *testing.T) {
+	os.Setenv("JOB_SELECTOR_GLOB", "myapp-*")
+	t.Cleanup(func() { os.Unsetenv("JOB_SELECTOR_GLOB") })
+	cfg, err := LoadFromArgs(newFS(), []string{"--repo-url", "https://example.com/r.git"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.JobSelectorGlob != "myapp-*" {
+		t.Errorf("JobSelectorGlob: want myapp-*, got %q", cfg.JobSelectorGlob)
 	}
 }
