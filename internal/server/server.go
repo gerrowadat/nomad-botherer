@@ -161,6 +161,15 @@ var indexTmpl = template.Must(template.New("index").Parse(`<!DOCTYPE html>
     <span class="ok">OK — no differences</span>
     {{- end}}
   </p>
+  <p>Watching:
+    {{- if .SelectionGlob}} jobs matching <code>{{.SelectionGlob}}</code>{{end}}
+    {{- if and .SelectionGlob .ManagedMetaKey}}, or{{end}}
+    {{- if .ManagedMetaKey}} jobs with <code>{{.ManagedMetaKey}}=true</code> in job meta{{end}}
+    {{- if not (or .SelectionGlob .ManagedMetaKey)}} <em>no jobs — no selection criteria configured</em>{{end}}
+  </p>
+  {{- if .ManagedMetaKey}}
+  <p><small>To include a job, add <code>meta { &#34;{{.ManagedMetaKey}}&#34; = &#34;true&#34; }</code> to its HCL definition.</small></p>
+  {{- end}}
   {{- if .LastCheck}}
   <p>Last diff check: {{.LastCheck}}{{if .Commit}} (commit <code>{{.Commit}}</code>){{end}}</p>
   {{- end}}
@@ -202,11 +211,15 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		Commit          string
 		LastWebhookOK   string
 		LastWebhookFail string
+		SelectionGlob   string
+		ManagedMetaKey  string
 	}{
-		Version:   s.version,
-		Starting:  starting,
-		DiffCount: len(diffs),
-		Commit:    commit,
+		Version:        s.version,
+		Starting:       starting,
+		DiffCount:      len(diffs),
+		Commit:         commit,
+		SelectionGlob:  s.cfg.JobSelectorGlob,
+		ManagedMetaKey: s.cfg.ManagedMetaKey,
 	}
 	if !lastCheck.IsZero() {
 		data.LastCheck = lastCheck.Format(time.RFC3339)

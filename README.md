@@ -19,6 +19,7 @@ Three kinds of drift are tracked:
 
 - [Design and prior art](#design-and-prior-art)
 - [How it works](#how-it-works)
+- [Job selection](#job-selection)
 - [Installation](#installation)
 - [Quick start](#quick-start)
 - [Configuration](#configuration)
@@ -57,14 +58,65 @@ The design proposals for job application and change checkpointing are in
 
 1. On startup, the repo is cloned entirely into memory using [go-git](https://github.com/go-git/go-git).
 2. All `.hcl` files under `--hcl-dir` (default: repo root) are sent to Nomad's `/v1/jobs/parse` endpoint to produce canonical `Job` structs.
-3. For each parsed job:
+3. Each parsed job is checked against the configured **job selection criteria** (see [Job selection](#job-selection)). Jobs that do not match are ignored.
+4. For each selected job:
    - If the job is **not registered** in Nomad, or is registered but in **`dead` state** → `missing_from_nomad`
    - If the job **is registered and live**, `nomad job plan` is run → if the plan shows changes → `modified`
-4. All jobs **currently running in Nomad** (non-dead) that have no corresponding HCL file → `missing_from_hcl`
+5. All jobs **currently running in Nomad** (non-dead) that match the selection criteria but have no corresponding HCL file → `missing_from_hcl`
 
    Dead jobs are excluded from both checks by default because a stopped job is expected state — it was intentionally halted. Pass `--include-dead-jobs` to treat dead jobs like running ones.
 5. Results are stored in memory and exposed via `/healthz` (JSON), `/metrics` (Prometheus), and the gRPC API.
 6. The repo is re-checked on every `--poll-interval` (git fetch), on every `--diff-interval` (Nomad-side drift), and immediately on a webhook push event or a `TriggerRefresh` gRPC call. When `--max-git-staleness` or `--max-nomad-staleness` is set, a dedicated background goroutine for each forces a refresh if the respective source has not been updated within the configured window — useful when webhooks are unreliable or paused. The two timers are independent and can be set or disabled individually.
+
+---
+
+## Job selection
+
+nomad-botherer does not watch every job in a cluster by default. A job must match at least one of the configured selection criteria to be diffed:
+
+| Criterion | Flag | Default |
+|-----------|------|---------|
+| Name glob | `--job-selector-glob` | *(empty — no glob selection)* |
+| Meta tag | `--managed-meta-key` | `gitops.managed` |
+
+The two criteria are a **union**: a job is selected if it matches the glob *or* has the meta key set to `"true"`. With the defaults (no glob, meta key `gitops.managed`), only jobs that declare the meta key in their HCL are watched.
+
+**Opting a job in via meta tag (default method):**
+
+```hcl
+job "my-service" {
+  meta {
+    "gitops.managed" = "true"
+  }
+  # ...rest of job definition
+}
+```
+
+**Watching all jobs in a directory:**
+
+```bash
+./nomad-botherer --job-selector-glob='*' ...
+```
+
+**Watching a named prefix:**
+
+```bash
+./nomad-botherer --job-selector-glob='production-*' ...
+```
+
+**Changing the meta key name** (useful when sharing a cluster with multiple teams or tools):
+
+```bash
+./nomad-botherer --managed-meta-key='myorg.managed' ...
+```
+
+**Disabling meta-based selection entirely** (glob only):
+
+```bash
+./nomad-botherer --managed-meta-key='' --job-selector-glob='myprefix-*' ...
+```
+
+If both `--job-selector-glob` and `--managed-meta-key` are empty, no jobs are selected and no diffs will be reported. The current selection criteria are shown on the `/` status page.
 
 ---
 
@@ -147,6 +199,8 @@ Every flag has a corresponding environment variable. Environment variables are r
 | `--grpc-api-key` | `GRPC_API_KEY` | | Pre-shared API key for gRPC authentication. Required when `--grpc-listen-addr` is non-empty |
 | `--diff-interval` | `DIFF_INTERVAL` | `1m` | Periodic Nomad-side drift check interval |
 | `--include-dead-jobs` | `INCLUDE_DEAD_JOBS` | `false` | Treat dead Nomad jobs like running ones (by default dead jobs count as missing) |
+| `--job-selector-glob` | `JOB_SELECTOR_GLOB` | *(empty — no glob)* | Glob pattern selecting jobs to watch by name (e.g. `myprefix-*`, `*` for all). Combined with `--managed-meta-key` as a union. |
+| `--managed-meta-key` | `MANAGED_META_KEY` | `gitops.managed` | Job HCL meta key that opts a job into management. The value must be `"true"`. Set to empty string to disable meta-based selection. |
 | `--max-git-staleness` | `MAX_GIT_STALENESS` | `0` (disabled) | If the git repo has not been successfully fetched within this window, force an immediate fetch. Set to `0` to disable. E.g. `--max-git-staleness=30m` |
 | `--max-nomad-staleness` | `MAX_NOMAD_STALENESS` | `0` (disabled) | If the Nomad diff check has not run within this window, force an immediate check. Set to `0` to disable. E.g. `--max-nomad-staleness=10m` |
 | `--log-level` | `LOG_LEVEL` | `info` | Log level: `debug`, `info`, `warn`, `error` |

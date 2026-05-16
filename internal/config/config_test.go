@@ -110,6 +110,7 @@ func TestLoadFromArgs_Defaults(t *testing.T) {
 	for _, k := range []string{
 		"GIT_REPO_URL", "GIT_BRANCH", "NOMAD_ADDR", "NOMAD_NAMESPACE",
 		"LISTEN_ADDR", "WEBHOOK_PATH", "LOG_LEVEL", "POLL_INTERVAL", "DIFF_INTERVAL",
+		"JOB_SELECTOR_GLOB", "MANAGED_META_KEY",
 	} {
 		os.Unsetenv(k)
 	}
@@ -130,6 +131,8 @@ func TestLoadFromArgs_Defaults(t *testing.T) {
 		{"ListenAddr", cfg.ListenAddr, ":8080"},
 		{"WebhookPath", cfg.WebhookPath, "/webhook"},
 		{"LogLevel", cfg.LogLevel, "info"},
+		{"JobSelectorGlob", cfg.JobSelectorGlob, ""},
+		{"ManagedMetaKey", cfg.ManagedMetaKey, "gitops.managed"},
 	}
 	for _, c := range checks {
 		if c.got != c.want {
@@ -397,5 +400,93 @@ func TestLoadFromArgs_GRPCDisabled(t *testing.T) {
 	}
 	if cfg.GRPCListenAddr != "" {
 		t.Errorf("GRPCListenAddr: want empty (disabled), got %q", cfg.GRPCListenAddr)
+	}
+}
+
+func TestLoadFromArgs_ManagedMetaKeyDefault(t *testing.T) {
+	os.Unsetenv("MANAGED_META_KEY")
+	cfg, err := LoadFromArgs(newFS(), []string{"--repo-url", "https://example.com/r.git"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.ManagedMetaKey != "gitops.managed" {
+		t.Errorf("ManagedMetaKey: want gitops.managed, got %q", cfg.ManagedMetaKey)
+	}
+}
+
+func TestLoadFromArgs_ManagedMetaKeyFlag(t *testing.T) {
+	os.Unsetenv("MANAGED_META_KEY")
+	cfg, err := LoadFromArgs(newFS(), []string{
+		"--repo-url", "https://example.com/r.git",
+		"--managed-meta-key", "myorg.managed",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.ManagedMetaKey != "myorg.managed" {
+		t.Errorf("ManagedMetaKey: want myorg.managed, got %q", cfg.ManagedMetaKey)
+	}
+}
+
+func TestLoadFromArgs_ManagedMetaKeyEnv(t *testing.T) {
+	os.Setenv("MANAGED_META_KEY", "acme.gitops")
+	t.Cleanup(func() { os.Unsetenv("MANAGED_META_KEY") })
+	cfg, err := LoadFromArgs(newFS(), []string{"--repo-url", "https://example.com/r.git"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.ManagedMetaKey != "acme.gitops" {
+		t.Errorf("ManagedMetaKey: want acme.gitops, got %q", cfg.ManagedMetaKey)
+	}
+}
+
+func TestLoadFromArgs_ManagedMetaKeyEmpty(t *testing.T) {
+	os.Unsetenv("MANAGED_META_KEY")
+	cfg, err := LoadFromArgs(newFS(), []string{
+		"--repo-url", "https://example.com/r.git",
+		"--managed-meta-key", "",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.ManagedMetaKey != "" {
+		t.Errorf("ManagedMetaKey: want empty (disabled), got %q", cfg.ManagedMetaKey)
+	}
+}
+
+func TestLoadFromArgs_JobSelectorGlobDefault(t *testing.T) {
+	os.Unsetenv("JOB_SELECTOR_GLOB")
+	cfg, err := LoadFromArgs(newFS(), []string{"--repo-url", "https://example.com/r.git"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.JobSelectorGlob != "" {
+		t.Errorf("JobSelectorGlob: want empty (no glob), got %q", cfg.JobSelectorGlob)
+	}
+}
+
+func TestLoadFromArgs_JobSelectorGlobFlag(t *testing.T) {
+	os.Unsetenv("JOB_SELECTOR_GLOB")
+	cfg, err := LoadFromArgs(newFS(), []string{
+		"--repo-url", "https://example.com/r.git",
+		"--job-selector-glob", "prod-*",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.JobSelectorGlob != "prod-*" {
+		t.Errorf("JobSelectorGlob: want prod-*, got %q", cfg.JobSelectorGlob)
+	}
+}
+
+func TestLoadFromArgs_JobSelectorGlobEnv(t *testing.T) {
+	os.Setenv("JOB_SELECTOR_GLOB", "myapp-*")
+	t.Cleanup(func() { os.Unsetenv("JOB_SELECTOR_GLOB") })
+	cfg, err := LoadFromArgs(newFS(), []string{"--repo-url", "https://example.com/r.git"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.JobSelectorGlob != "myapp-*" {
+		t.Errorf("JobSelectorGlob: want myapp-*, got %q", cfg.JobSelectorGlob)
 	}
 }

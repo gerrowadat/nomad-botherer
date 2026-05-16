@@ -54,12 +54,22 @@ func defaultMock() *mockJobsClient {
 }
 
 func newTestDiffer(mock *mockJobsClient) *nomad.Differ {
-	cfg := &config.Config{NomadAddr: "http://localhost:4646", NomadNamespace: "default"}
+	cfg := &config.Config{NomadAddr: "http://localhost:4646", NomadNamespace: "default", JobSelectorGlob: "*"}
 	return nomad.NewWithClient(cfg, mock)
 }
 
 func newTestDifferWithDeadJobs(mock *mockJobsClient) *nomad.Differ {
-	cfg := &config.Config{NomadAddr: "http://localhost:4646", NomadNamespace: "default", IncludeDeadJobs: true}
+	cfg := &config.Config{NomadAddr: "http://localhost:4646", NomadNamespace: "default", JobSelectorGlob: "*", IncludeDeadJobs: true}
+	return nomad.NewWithClient(cfg, mock)
+}
+
+func newTestDifferWithSelection(mock *mockJobsClient, glob, metaKey string) *nomad.Differ {
+	cfg := &config.Config{
+		NomadAddr:       "http://localhost:4646",
+		NomadNamespace:  "default",
+		JobSelectorGlob: glob,
+		ManagedMetaKey:  metaKey,
+	}
 	return nomad.NewWithClient(cfg, mock)
 }
 
@@ -378,7 +388,7 @@ func TestDiffer_ListError_Skipped(t *testing.T) {
 }
 
 func newTestDifferWithRegistry(mock *mockJobsClient, reg prometheus.Registerer) *nomad.Differ {
-	cfg := &config.Config{NomadAddr: "http://localhost:4646", NomadNamespace: "default"}
+	cfg := &config.Config{NomadAddr: "http://localhost:4646", NomadNamespace: "default", JobSelectorGlob: "*"}
 	return nomad.NewWithClientAndRegistry(cfg, mock, reg)
 }
 
@@ -800,5 +810,246 @@ func TestDiffer_ForceCheck_BypassesSkipOptimization(t *testing.T) {
 	}
 	if infoCalls != firstCalls {
 		t.Errorf("second ForceCheck should have been skipped by Check(); infoCalls went from %d to %d", firstCalls, infoCalls)
+	}
+}
+
+// ── Job selection tests ──────────────────────────────────────────────────────
+
+// TestDiffer_GlobSelection_WildcardMatchesAll verifies that glob="*" selects all jobs.
+func TestDiffer_GlobSelection_WildcardMatchesAll(t *testing.T) {
+	mock := defaultMock()
+	mock.infoFn = func(jobID string, q *nomadapi.QueryOptions) (*nomadapi.Job, *nomadapi.QueryMeta, error) {
+		return nil, nil, fmt.Errorf("404: not found")
+	}
+	d := newTestDifferWithSelection(mock, "*", "")
+
+	if err := d.Check(map[string]string{"job.hcl": `job "any-job" {}`}, "abc"); err != nil {
+		t.Fatal(err)
+	}
+	diffs, _, _ := d.Diffs()
+	if len(diffs) != 1 || diffs[0].DiffType != nomad.DiffTypeMissingFromNomad {
+		t.Errorf("expected 1 missing_from_nomad diff with wildcard glob, got %+v", diffs)
+	}
+}
+
+// TestDiffer_GlobSelection_PrefixMatch verifies that a prefix glob selects matching jobs.
+func TestDiffer_GlobSelection_PrefixMatch(t *testing.T) {
+	mock := defaultMock()
+	mock.parseHCLFn = func(jobHCL string, normalize bool) (*nomadapi.Job, error) {
+		if strings.Contains(jobHCL, "prod-web") {
+			return &nomadapi.Job{ID: strPtr("prod-web")}, nil
+		}
+		return &nomadapi.Job{ID: strPtr("staging-web")}, nil
+	}
+	mock.infoFn = func(jobID string, q *nomadapi.QueryOptions) (*nomadapi.Job, *nomadapi.QueryMeta, error) {
+		return nil, nil, fmt.Errorf("404: not found")
+	}
+	d := newTestDifferWithSelection(mock, "prod-*", "")
+
+	files := map[string]string{
+		"prod-web.hcl":    `job "prod-web" {}`,
+		"staging-web.hcl": `job "staging-web" {}`,
+	}
+	if err := d.Check(files, "abc"); err != nil {
+		t.Fatal(err)
+	}
+	diffs, _, _ := d.Diffs()
+	if len(diffs) != 1 {
+		t.Fatalf("expected 1 diff (only prod-web), got %d: %+v", len(diffs), diffs)
+	}
+	if diffs[0].JobID != "prod-web" {
+		t.Errorf("expected diff for prod-web, got %q", diffs[0].JobID)
+	}
+}
+
+// TestDiffer_GlobSelection_NoMatch_JobSkipped verifies that a non-matching job is
+// silently excluded and produces no diff.
+func TestDiffer_GlobSelection_NoMatch_JobSkipped(t *testing.T) {
+	mock := defaultMock()
+	d := newTestDifferWithSelection(mock, "prod-*", "")
+
+	if err := d.Check(map[string]string{"job.hcl": `job "staging-job" {}`}, "abc"); err != nil {
+		t.Fatal(err)
+	}
+	diffs, _, _ := d.Diffs()
+	if len(diffs) != 0 {
+		t.Errorf("expected 0 diffs for non-matching glob, got %d: %+v", len(diffs), diffs)
+	}
+}
+
+// TestDiffer_MetaSelection_Matches verifies that a job with the managed meta key
+// is selected even when no glob is configured.
+func TestDiffer_MetaSelection_Matches(t *testing.T) {
+	mock := defaultMock()
+	mock.parseHCLFn = func(jobHCL string, normalize bool) (*nomadapi.Job, error) {
+		return &nomadapi.Job{
+			ID:   strPtr("managed-job"),
+			Meta: map[string]string{"gitops.managed": "true"},
+		}, nil
+	}
+	mock.infoFn = func(jobID string, q *nomadapi.QueryOptions) (*nomadapi.Job, *nomadapi.QueryMeta, error) {
+		return nil, nil, fmt.Errorf("404: not found")
+	}
+	d := newTestDifferWithSelection(mock, "", "gitops.managed")
+
+	if err := d.Check(map[string]string{"job.hcl": `job "managed-job" {}`}, "abc"); err != nil {
+		t.Fatal(err)
+	}
+	diffs, _, _ := d.Diffs()
+	if len(diffs) != 1 || diffs[0].DiffType != nomad.DiffTypeMissingFromNomad {
+		t.Errorf("expected 1 missing_from_nomad diff for managed job, got %+v", diffs)
+	}
+}
+
+// TestDiffer_MetaSelection_NoTag_JobSkipped verifies that a job without the managed
+// meta key is excluded when no glob is configured.
+func TestDiffer_MetaSelection_NoTag_JobSkipped(t *testing.T) {
+	mock := defaultMock()
+	mock.parseHCLFn = func(jobHCL string, normalize bool) (*nomadapi.Job, error) {
+		return &nomadapi.Job{ID: strPtr("unmanaged-job"), Meta: nil}, nil
+	}
+	d := newTestDifferWithSelection(mock, "", "gitops.managed")
+
+	if err := d.Check(map[string]string{"job.hcl": `job "unmanaged-job" {}`}, "abc"); err != nil {
+		t.Fatal(err)
+	}
+	diffs, _, _ := d.Diffs()
+	if len(diffs) != 0 {
+		t.Errorf("expected 0 diffs for job without meta tag, got %d: %+v", len(diffs), diffs)
+	}
+}
+
+// TestDiffer_MetaSelection_CustomKey verifies that a custom meta key name works.
+func TestDiffer_MetaSelection_CustomKey(t *testing.T) {
+	mock := defaultMock()
+	mock.parseHCLFn = func(jobHCL string, normalize bool) (*nomadapi.Job, error) {
+		return &nomadapi.Job{
+			ID:   strPtr("my-job"),
+			Meta: map[string]string{"myorg.watched": "true"},
+		}, nil
+	}
+	mock.infoFn = func(jobID string, q *nomadapi.QueryOptions) (*nomadapi.Job, *nomadapi.QueryMeta, error) {
+		return nil, nil, fmt.Errorf("404: not found")
+	}
+	d := newTestDifferWithSelection(mock, "", "myorg.watched")
+
+	if err := d.Check(map[string]string{"job.hcl": `job "my-job" {}`}, "abc"); err != nil {
+		t.Fatal(err)
+	}
+	diffs, _, _ := d.Diffs()
+	if len(diffs) != 1 {
+		t.Errorf("expected 1 diff with custom meta key, got %d: %+v", len(diffs), diffs)
+	}
+}
+
+// TestDiffer_GlobOrMeta_EitherSelects verifies that a job matching either the
+// glob or the meta key is included (union, not intersection).
+func TestDiffer_GlobOrMeta_EitherSelects(t *testing.T) {
+	mock := defaultMock()
+	mock.parseHCLFn = func(jobHCL string, normalize bool) (*nomadapi.Job, error) {
+		if strings.Contains(jobHCL, "by-glob") {
+			return &nomadapi.Job{ID: strPtr("by-glob"), Meta: nil}, nil
+		}
+		return &nomadapi.Job{
+			ID:   strPtr("by-meta"),
+			Meta: map[string]string{"gitops.managed": "true"},
+		}, nil
+	}
+	mock.infoFn = func(jobID string, q *nomadapi.QueryOptions) (*nomadapi.Job, *nomadapi.QueryMeta, error) {
+		return nil, nil, fmt.Errorf("404: not found")
+	}
+	d := newTestDifferWithSelection(mock, "by-glob", "gitops.managed")
+
+	files := map[string]string{
+		"by-glob.hcl": `job "by-glob" {}`,
+		"by-meta.hcl": `job "by-meta" {}`,
+	}
+	if err := d.Check(files, "abc"); err != nil {
+		t.Fatal(err)
+	}
+	diffs, _, _ := d.Diffs()
+	if len(diffs) != 2 {
+		t.Errorf("expected 2 diffs (one per selector), got %d: %+v", len(diffs), diffs)
+	}
+}
+
+// TestDiffer_MissingFromHCL_ManagedByMeta_Reported verifies that a Nomad job
+// with the managed meta key and no HCL file is reported as missing_from_hcl.
+func TestDiffer_MissingFromHCL_ManagedByMeta_Reported(t *testing.T) {
+	mock := defaultMock()
+	mock.listFn = func(q *nomadapi.QueryOptions) ([]*nomadapi.JobListStub, *nomadapi.QueryMeta, error) {
+		return []*nomadapi.JobListStub{
+			{ID: "managed-orphan", Status: "running", Meta: map[string]string{"gitops.managed": "true"}},
+		}, nil, nil
+	}
+	d := newTestDifferWithSelection(mock, "", "gitops.managed")
+
+	if err := d.Check(map[string]string{}, "abc"); err != nil {
+		t.Fatal(err)
+	}
+	diffs, _, _ := d.Diffs()
+	if len(diffs) != 1 || diffs[0].DiffType != nomad.DiffTypeMissingFromHCL {
+		t.Errorf("expected 1 missing_from_hcl diff for managed orphan, got %+v", diffs)
+	}
+}
+
+// TestDiffer_MissingFromHCL_UnmanagedByMeta_NotReported verifies that a Nomad
+// job without the managed meta key is not reported as missing_from_hcl.
+func TestDiffer_MissingFromHCL_UnmanagedByMeta_NotReported(t *testing.T) {
+	mock := defaultMock()
+	mock.listFn = func(q *nomadapi.QueryOptions) ([]*nomadapi.JobListStub, *nomadapi.QueryMeta, error) {
+		return []*nomadapi.JobListStub{
+			{ID: "unmanaged-job", Status: "running", Meta: nil},
+		}, nil, nil
+	}
+	d := newTestDifferWithSelection(mock, "", "gitops.managed")
+
+	if err := d.Check(map[string]string{}, "abc"); err != nil {
+		t.Fatal(err)
+	}
+	diffs, _, _ := d.Diffs()
+	if len(diffs) != 0 {
+		t.Errorf("expected 0 diffs for unmanaged Nomad job, got %d: %+v", len(diffs), diffs)
+	}
+}
+
+// TestDiffer_MissingFromHCL_ManagedByGlob_Reported verifies that a Nomad job
+// matching the glob but with no HCL file is reported as missing_from_hcl.
+func TestDiffer_MissingFromHCL_ManagedByGlob_Reported(t *testing.T) {
+	mock := defaultMock()
+	mock.listFn = func(q *nomadapi.QueryOptions) ([]*nomadapi.JobListStub, *nomadapi.QueryMeta, error) {
+		return []*nomadapi.JobListStub{
+			{ID: "prod-web", Status: "running"},
+		}, nil, nil
+	}
+	d := newTestDifferWithSelection(mock, "prod-*", "")
+
+	if err := d.Check(map[string]string{}, "abc"); err != nil {
+		t.Fatal(err)
+	}
+	diffs, _, _ := d.Diffs()
+	if len(diffs) != 1 || diffs[0].DiffType != nomad.DiffTypeMissingFromHCL {
+		t.Errorf("expected 1 missing_from_hcl for glob-matched job, got %+v", diffs)
+	}
+}
+
+// TestDiffer_NoSelection_NoJobsWatched verifies that with both glob and meta key
+// empty, no jobs are selected and no diffs are reported.
+func TestDiffer_NoSelection_NoJobsWatched(t *testing.T) {
+	mock := defaultMock()
+	mock.infoFn = func(jobID string, q *nomadapi.QueryOptions) (*nomadapi.Job, *nomadapi.QueryMeta, error) {
+		return nil, nil, fmt.Errorf("404: not found")
+	}
+	mock.listFn = func(q *nomadapi.QueryOptions) ([]*nomadapi.JobListStub, *nomadapi.QueryMeta, error) {
+		return []*nomadapi.JobListStub{{ID: "some-job", Status: "running"}}, nil, nil
+	}
+	d := newTestDifferWithSelection(mock, "", "")
+
+	if err := d.Check(map[string]string{"job.hcl": `job "some-job" {}`}, "abc"); err != nil {
+		t.Fatal(err)
+	}
+	diffs, _, _ := d.Diffs()
+	if len(diffs) != 0 {
+		t.Errorf("expected 0 diffs with no selection criteria, got %d: %+v", len(diffs), diffs)
 	}
 }
