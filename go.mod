@@ -1,6 +1,6 @@
 module github.com/gerrowadat/nomad-botherer
 
-go 1.25.0
+go 1.25.6
 
 require (
 	github.com/go-git/go-billy/v5 v5.9.0
