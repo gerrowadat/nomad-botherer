@@ -63,12 +63,12 @@ func newTestDifferWithDeadJobs(mock *mockJobsClient) *nomad.Differ {
 	return nomad.NewWithClient(cfg, mock)
 }
 
-func newTestDifferWithSelection(mock *mockJobsClient, glob, metaKey string) *nomad.Differ {
+func newTestDifferWithSelection(mock *mockJobsClient, glob, metaPrefix string) *nomad.Differ {
 	cfg := &config.Config{
-		NomadAddr:       "http://localhost:4646",
-		NomadNamespace:  "default",
-		JobSelectorGlob: glob,
-		ManagedMetaKey:  metaKey,
+		NomadAddr:         "http://localhost:4646",
+		NomadNamespace:    "default",
+		JobSelectorGlob:   glob,
+		ManagedMetaPrefix: metaPrefix,
 	}
 	return nomad.NewWithClient(cfg, mock)
 }
@@ -821,7 +821,7 @@ func TestDiffer_GlobSelection_WildcardMatchesAll(t *testing.T) {
 	mock.infoFn = func(jobID string, q *nomadapi.QueryOptions) (*nomadapi.Job, *nomadapi.QueryMeta, error) {
 		return nil, nil, fmt.Errorf("404: not found")
 	}
-	d := newTestDifferWithSelection(mock, "*", "")
+	d := newTestDifferWithSelection(mock, "*", "" /* no meta prefix */)
 
 	if err := d.Check(map[string]string{"job.hcl": `job "any-job" {}`}, "abc"); err != nil {
 		t.Fatal(err)
@@ -844,7 +844,7 @@ func TestDiffer_GlobSelection_PrefixMatch(t *testing.T) {
 	mock.infoFn = func(jobID string, q *nomadapi.QueryOptions) (*nomadapi.Job, *nomadapi.QueryMeta, error) {
 		return nil, nil, fmt.Errorf("404: not found")
 	}
-	d := newTestDifferWithSelection(mock, "prod-*", "")
+	d := newTestDifferWithSelection(mock, "prod-*", "" /* no meta prefix */)
 
 	files := map[string]string{
 		"prod-web.hcl":    `job "prod-web" {}`,
@@ -866,7 +866,7 @@ func TestDiffer_GlobSelection_PrefixMatch(t *testing.T) {
 // silently excluded and produces no diff.
 func TestDiffer_GlobSelection_NoMatch_JobSkipped(t *testing.T) {
 	mock := defaultMock()
-	d := newTestDifferWithSelection(mock, "prod-*", "")
+	d := newTestDifferWithSelection(mock, "prod-*", "" /* no meta prefix */)
 
 	if err := d.Check(map[string]string{"job.hcl": `job "staging-job" {}`}, "abc"); err != nil {
 		t.Fatal(err)
@@ -890,7 +890,7 @@ func TestDiffer_MetaSelection_Matches(t *testing.T) {
 	mock.infoFn = func(jobID string, q *nomadapi.QueryOptions) (*nomadapi.Job, *nomadapi.QueryMeta, error) {
 		return nil, nil, fmt.Errorf("404: not found")
 	}
-	d := newTestDifferWithSelection(mock, "", "gitops.managed")
+	d := newTestDifferWithSelection(mock, "", "gitops")
 
 	if err := d.Check(map[string]string{"job.hcl": `job "managed-job" {}`}, "abc"); err != nil {
 		t.Fatal(err)
@@ -908,7 +908,7 @@ func TestDiffer_MetaSelection_NoTag_JobSkipped(t *testing.T) {
 	mock.parseHCLFn = func(jobHCL string, normalize bool) (*nomadapi.Job, error) {
 		return &nomadapi.Job{ID: strPtr("unmanaged-job"), Meta: nil}, nil
 	}
-	d := newTestDifferWithSelection(mock, "", "gitops.managed")
+	d := newTestDifferWithSelection(mock, "", "gitops")
 
 	if err := d.Check(map[string]string{"job.hcl": `job "unmanaged-job" {}`}, "abc"); err != nil {
 		t.Fatal(err)
@@ -919,19 +919,20 @@ func TestDiffer_MetaSelection_NoTag_JobSkipped(t *testing.T) {
 	}
 }
 
-// TestDiffer_MetaSelection_CustomKey verifies that a custom meta key name works.
-func TestDiffer_MetaSelection_CustomKey(t *testing.T) {
+// TestDiffer_MetaSelection_CustomPrefix verifies that a custom meta prefix works,
+// deriving the full key as "<prefix>.managed".
+func TestDiffer_MetaSelection_CustomPrefix(t *testing.T) {
 	mock := defaultMock()
 	mock.parseHCLFn = func(jobHCL string, normalize bool) (*nomadapi.Job, error) {
 		return &nomadapi.Job{
 			ID:   strPtr("my-job"),
-			Meta: map[string]string{"myorg.watched": "true"},
+			Meta: map[string]string{"myorg.managed": "true"},
 		}, nil
 	}
 	mock.infoFn = func(jobID string, q *nomadapi.QueryOptions) (*nomadapi.Job, *nomadapi.QueryMeta, error) {
 		return nil, nil, fmt.Errorf("404: not found")
 	}
-	d := newTestDifferWithSelection(mock, "", "myorg.watched")
+	d := newTestDifferWithSelection(mock, "", "myorg")
 
 	if err := d.Check(map[string]string{"job.hcl": `job "my-job" {}`}, "abc"); err != nil {
 		t.Fatal(err)
@@ -958,7 +959,7 @@ func TestDiffer_GlobOrMeta_EitherSelects(t *testing.T) {
 	mock.infoFn = func(jobID string, q *nomadapi.QueryOptions) (*nomadapi.Job, *nomadapi.QueryMeta, error) {
 		return nil, nil, fmt.Errorf("404: not found")
 	}
-	d := newTestDifferWithSelection(mock, "by-glob", "gitops.managed")
+	d := newTestDifferWithSelection(mock, "by-glob", "gitops")
 
 	files := map[string]string{
 		"by-glob.hcl": `job "by-glob" {}`,
@@ -982,7 +983,7 @@ func TestDiffer_MissingFromHCL_ManagedByMeta_Reported(t *testing.T) {
 			{ID: "managed-orphan", Status: "running", Meta: map[string]string{"gitops.managed": "true"}},
 		}, nil, nil
 	}
-	d := newTestDifferWithSelection(mock, "", "gitops.managed")
+	d := newTestDifferWithSelection(mock, "", "gitops")
 
 	if err := d.Check(map[string]string{}, "abc"); err != nil {
 		t.Fatal(err)
@@ -1002,7 +1003,7 @@ func TestDiffer_MissingFromHCL_UnmanagedByMeta_NotReported(t *testing.T) {
 			{ID: "unmanaged-job", Status: "running", Meta: nil},
 		}, nil, nil
 	}
-	d := newTestDifferWithSelection(mock, "", "gitops.managed")
+	d := newTestDifferWithSelection(mock, "", "gitops")
 
 	if err := d.Check(map[string]string{}, "abc"); err != nil {
 		t.Fatal(err)
@@ -1043,7 +1044,7 @@ func TestDiffer_NoSelection_NoJobsWatched(t *testing.T) {
 	mock.listFn = func(q *nomadapi.QueryOptions) ([]*nomadapi.JobListStub, *nomadapi.QueryMeta, error) {
 		return []*nomadapi.JobListStub{{ID: "some-job", Status: "running"}}, nil, nil
 	}
-	d := newTestDifferWithSelection(mock, "", "")
+	d := newTestDifferWithSelection(mock, "", "" /* both empty — nothing selected */)
 
 	if err := d.Check(map[string]string{"job.hcl": `job "some-job" {}`}, "abc"); err != nil {
 		t.Fatal(err)

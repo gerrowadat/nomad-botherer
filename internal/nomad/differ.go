@@ -65,8 +65,8 @@ type Differ struct {
 	jobs            NomadJobsClient
 	namespace       string
 	includeDeadJobs bool
-	jobSelectorGlob string
-	managedMetaKey  string
+	jobSelectorGlob   string
+	managedMetaPrefix string
 
 	mu              sync.RWMutex
 	diffs           []JobDiff
@@ -89,14 +89,14 @@ type Differ struct {
 }
 
 // newDifferBase constructs a Differ with metrics registered into reg.
-func newDifferBase(jobs NomadJobsClient, namespace string, includeDeadJobs bool, jobSelectorGlob, managedMetaKey string, reg prometheus.Registerer) *Differ {
+func newDifferBase(jobs NomadJobsClient, namespace string, includeDeadJobs bool, jobSelectorGlob, managedMetaPrefix string, reg prometheus.Registerer) *Differ {
 	f := promauto.With(reg)
 	return &Differ{
-		jobs:            jobs,
-		namespace:       namespace,
-		includeDeadJobs: includeDeadJobs,
-		jobSelectorGlob: jobSelectorGlob,
-		managedMetaKey:  managedMetaKey,
+		jobs:              jobs,
+		namespace:         namespace,
+		includeDeadJobs:   includeDeadJobs,
+		jobSelectorGlob:   jobSelectorGlob,
+		managedMetaPrefix: managedMetaPrefix,
 		driftFirstSeen:  make(map[string]time.Time),
 		hclParseErrors: f.NewCounter(prometheus.CounterOpts{
 			Name: "nomad_botherer_hcl_parse_errors_total",
@@ -158,31 +158,31 @@ func NewDiffer(cfg *config.Config) (*Differ, error) {
 		return nil, fmt.Errorf("creating nomad client: %w", err)
 	}
 
-	return newDifferBase(client.Jobs(), cfg.NomadNamespace, cfg.IncludeDeadJobs, cfg.JobSelectorGlob, cfg.ManagedMetaKey, prometheus.DefaultRegisterer), nil
+	return newDifferBase(client.Jobs(), cfg.NomadNamespace, cfg.IncludeDeadJobs, cfg.JobSelectorGlob, cfg.ManagedMetaPrefix, prometheus.DefaultRegisterer), nil
 }
 
 // NewWithClient creates a Differ with a custom jobs client, intended for tests.
 func NewWithClient(cfg *config.Config, jobs NomadJobsClient) *Differ {
-	return newDifferBase(jobs, cfg.NomadNamespace, cfg.IncludeDeadJobs, cfg.JobSelectorGlob, cfg.ManagedMetaKey, prometheus.NewRegistry())
+	return newDifferBase(jobs, cfg.NomadNamespace, cfg.IncludeDeadJobs, cfg.JobSelectorGlob, cfg.ManagedMetaPrefix, prometheus.NewRegistry())
 }
 
 // NewWithClientAndRegistry creates a Differ with a custom jobs client and Prometheus
 // registry. Use this in tests that need to inspect metric values.
 func NewWithClientAndRegistry(cfg *config.Config, jobs NomadJobsClient, reg prometheus.Registerer) *Differ {
-	return newDifferBase(jobs, cfg.NomadNamespace, cfg.IncludeDeadJobs, cfg.JobSelectorGlob, cfg.ManagedMetaKey, reg)
+	return newDifferBase(jobs, cfg.NomadNamespace, cfg.IncludeDeadJobs, cfg.JobSelectorGlob, cfg.ManagedMetaPrefix, reg)
 }
 
 // jobIsSelected reports whether a job should be watched. A job is selected when
-// its ID matches the configured glob pattern, or when its meta map contains the
-// configured managed meta key with the value "true". If both glob and meta key
-// are empty, no jobs are selected.
+// its ID matches the configured glob pattern, or when its meta map contains
+// "<managedMetaPrefix>.managed" set to "true". If both are empty, no jobs
+// are selected.
 func (d *Differ) jobIsSelected(jobID string, meta map[string]string) bool {
 	if d.jobSelectorGlob != "" {
 		if matched, _ := path.Match(d.jobSelectorGlob, jobID); matched {
 			return true
 		}
 	}
-	if d.managedMetaKey != "" && meta[d.managedMetaKey] == "true" {
+	if d.managedMetaPrefix != "" && meta[d.managedMetaPrefix+".managed"] == "true" {
 		return true
 	}
 	return false

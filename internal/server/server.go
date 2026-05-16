@@ -203,6 +203,11 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	lastFail := s.lastWebhookFailure
 	s.webhookMu.RUnlock()
 
+	managedMetaKey := ""
+	if s.cfg.ManagedMetaPrefix != "" {
+		managedMetaKey = s.cfg.ManagedMetaPrefix + ".managed"
+	}
+
 	data := struct {
 		Version         string
 		Starting        bool
@@ -219,7 +224,7 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		DiffCount:      len(diffs),
 		Commit:         commit,
 		SelectionGlob:  s.cfg.JobSelectorGlob,
-		ManagedMetaKey: s.cfg.ManagedMetaKey,
+		ManagedMetaKey: managedMetaKey,
 	}
 	if !lastCheck.IsZero() {
 		data.LastCheck = lastCheck.Format(time.RFC3339)

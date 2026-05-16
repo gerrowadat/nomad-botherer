@@ -58,7 +58,7 @@ The design proposals for job application and change checkpointing are in
 
 1. On startup, the repo is cloned entirely into memory using [go-git](https://github.com/go-git/go-git).
 2. All `.hcl` files under `--hcl-dir` (default: repo root) are sent to Nomad's `/v1/jobs/parse` endpoint to produce canonical `Job` structs.
-3. Each parsed job is checked against the configured **job selection criteria** (see [Job selection](#job-selection)). Jobs that do not match are ignored.
+3. Each parsed job is checked against the configured **job selection criteria** (see [Job selection](#job-selection)). Jobs that match neither the glob nor the `<prefix>.managed` meta key are ignored.
 4. For each selected job:
    - If the job is **not registered** in Nomad, or is registered but in **`dead` state** → `missing_from_nomad`
    - If the job **is registered and live**, `nomad job plan` is run → if the plan shows changes → `modified`
@@ -77,9 +77,11 @@ nomad-botherer does not watch every job in a cluster by default. A job must matc
 | Criterion | Flag | Default |
 |-----------|------|---------|
 | Name glob | `--job-selector-glob` | *(empty — no glob selection)* |
-| Meta tag | `--managed-meta-key` | `gitops.managed` |
+| Meta prefix | `--managed-meta-prefix` | `gitops` |
 
-The two criteria are a **union**: a job is selected if it matches the glob *or* has the meta key set to `"true"`. With the defaults (no glob, meta key `gitops.managed`), only jobs that declare the meta key in their HCL are watched.
+The two criteria are a **union**: a job is selected if it matches the glob *or* has the `<prefix>.managed` meta key set to `"true"`. With the defaults (no glob, prefix `gitops`), only jobs declaring `gitops.managed = "true"` in their HCL meta stanza are watched.
+
+The prefix is a namespace for all meta keys nomad-botherer reads or writes. Using `gitops` means the opt-in key is `gitops.managed`, and future attributes will follow the same `gitops.<attribute>` pattern. Use a different prefix if another team or tool already owns `gitops.*` on your cluster.
 
 **Opting a job in via meta tag (default method):**
 
@@ -104,19 +106,20 @@ job "my-service" {
 ./nomad-botherer --job-selector-glob='production-*' ...
 ```
 
-**Changing the meta key name** (useful when sharing a cluster with multiple teams or tools):
+**Changing the meta prefix** (useful when sharing a cluster with multiple teams or tools):
 
 ```bash
-./nomad-botherer --managed-meta-key='myorg.managed' ...
+./nomad-botherer --managed-meta-prefix='myorg' ...
+# opts in jobs with meta { "myorg.managed" = "true" }
 ```
 
 **Disabling meta-based selection entirely** (glob only):
 
 ```bash
-./nomad-botherer --managed-meta-key='' --job-selector-glob='myprefix-*' ...
+./nomad-botherer --managed-meta-prefix='' --job-selector-glob='myprefix-*' ...
 ```
 
-If both `--job-selector-glob` and `--managed-meta-key` are empty, no jobs are selected and no diffs will be reported. The current selection criteria are shown on the `/` status page.
+If both `--job-selector-glob` and `--managed-meta-prefix` are empty, no jobs are selected and no diffs will be reported. The current selection criteria are shown on the `/` status page.
 
 ---
 
@@ -199,8 +202,8 @@ Every flag has a corresponding environment variable. Environment variables are r
 | `--grpc-api-key` | `GRPC_API_KEY` | | Pre-shared API key for gRPC authentication. Required when `--grpc-listen-addr` is non-empty |
 | `--diff-interval` | `DIFF_INTERVAL` | `1m` | Periodic Nomad-side drift check interval |
 | `--include-dead-jobs` | `INCLUDE_DEAD_JOBS` | `false` | Treat dead Nomad jobs like running ones (by default dead jobs count as missing) |
-| `--job-selector-glob` | `JOB_SELECTOR_GLOB` | *(empty — no glob)* | Glob pattern selecting jobs to watch by name (e.g. `myprefix-*`, `*` for all). Combined with `--managed-meta-key` as a union. |
-| `--managed-meta-key` | `MANAGED_META_KEY` | `gitops.managed` | Job HCL meta key that opts a job into management. The value must be `"true"`. Set to empty string to disable meta-based selection. |
+| `--job-selector-glob` | `JOB_SELECTOR_GLOB` | *(empty — no glob)* | Glob pattern selecting jobs to watch by name (e.g. `myprefix-*`, `*` for all). Combined with `--managed-meta-prefix` as a union. |
+| `--managed-meta-prefix` | `MANAGED_META_PREFIX` | `gitops` | Prefix for job meta keys used by nomad-botherer. With prefix `gitops`, the key `gitops.managed=true` opts a job in. Empty disables meta-based selection. |
 | `--max-git-staleness` | `MAX_GIT_STALENESS` | `0` (disabled) | If the git repo has not been successfully fetched within this window, force an immediate fetch. Set to `0` to disable. E.g. `--max-git-staleness=30m` |
 | `--max-nomad-staleness` | `MAX_NOMAD_STALENESS` | `0` (disabled) | If the Nomad diff check has not run within this window, force an immediate check. Set to `0` to disable. E.g. `--max-nomad-staleness=10m` |
 | `--log-level` | `LOG_LEVEL` | `info` | Log level: `debug`, `info`, `warn`, `error` |
