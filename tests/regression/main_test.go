@@ -24,14 +24,52 @@ var testNomadVersion string
 // It is empty when the build failed; E2E tests skip themselves in that case.
 var testBinaryPath string
 
+// nomadSDKEnvVars is the full set of env vars that nomadapi.DefaultConfig()
+// reads automatically. We snapshot and clear these at startup so that
+// subprocesses spawned by tests (the E2E binary, Docker commands) cannot
+// accidentally reach a cluster that was configured in the caller's shell.
+var nomadSDKEnvVars = []string{
+	"NOMAD_ADDR",
+	"NOMAD_TOKEN",
+	"NOMAD_NAMESPACE",
+	"NOMAD_REGION",
+	"NOMAD_HTTP_AUTH",
+	"NOMAD_CACERT",
+	"NOMAD_CAPATH",
+	"NOMAD_CLIENT_CERT",
+	"NOMAD_CLIENT_KEY",
+	"NOMAD_SKIP_VERIFY",
+	"NOMAD_TLS_SERVER_NAME",
+}
+
 func TestMain(m *testing.M) {
+	// Snapshot and immediately clear all Nomad SDK env vars. Tests that need
+	// cluster config use the captured values directly; subprocesses inherit a
+	// clean environment and are configured only via explicit CLI flags.
+	savedEnv := make(map[string]string)
+	for _, k := range nomadSDKEnvVars {
+		if v, ok := os.LookupEnv(k); ok {
+			savedEnv[k] = v
+			os.Unsetenv(k)
+		}
+	}
+	restoreEnv := func() {
+		for k, v := range savedEnv {
+			os.Setenv(k, v)
+		}
+	}
+
+	// Read cluster config from the snapshot, not from the (now-cleared) env.
+	nomadAddrFromEnv := savedEnv["NOMAD_ADDR"]
+	nomadTokenFromEnv := savedEnv["NOMAD_TOKEN"]
+
 	var cleanup func()
 	var err error
 
 	switch {
-	case os.Getenv("NOMAD_ADDR") != "":
-		testNomadAddr = os.Getenv("NOMAD_ADDR")
-		testNomadVersion = os.Getenv("NOMAD_VERSION") // informational only
+	case nomadAddrFromEnv != "":
+		testNomadAddr = nomadAddrFromEnv
+		testNomadVersion = os.Getenv("NOMAD_VERSION") // test-only var, not an SDK var
 		cleanup = func() {}
 
 	default:
@@ -45,18 +83,23 @@ func TestMain(m *testing.M) {
 			fmt.Fprintf(os.Stderr, "regression: cannot start Nomad %s via Docker: %v\n", ver, err)
 			fmt.Fprintln(os.Stderr, "  Tip: set NOMAD_ADDR to point at an existing cluster.")
 			fmt.Fprintln(os.Stderr, "  Tip: set NOMAD_VERSION to pull a different image.")
+			restoreEnv()
 			os.Exit(1)
 		}
 	}
+
+	// Build the client with explicit fields; DefaultConfig() already has no
+	// env vars to read at this point.
 	cfg := nomadapi.DefaultConfig()
 	cfg.Address = testNomadAddr
-	if tok := os.Getenv("NOMAD_TOKEN"); tok != "" {
-		cfg.SecretID = tok
+	if nomadTokenFromEnv != "" {
+		cfg.SecretID = nomadTokenFromEnv
 	}
 	testNomadClient, err = nomadapi.NewClient(cfg)
 	if err != nil {
 		cleanup()
 		fmt.Fprintf(os.Stderr, "regression: nomad client: %v\n", err)
+		restoreEnv()
 		os.Exit(1)
 	}
 
@@ -72,5 +115,6 @@ func TestMain(m *testing.M) {
 	if testBinaryPath != "" {
 		os.Remove(testBinaryPath)
 	}
+	restoreEnv()
 	os.Exit(code)
 }
