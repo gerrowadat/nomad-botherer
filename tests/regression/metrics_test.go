@@ -35,9 +35,11 @@ func TestMetrics_AllExpectedMetricsPresent(t *testing.T) {
 		"nomad_botherer_hcl_non_job_files_skipped_total",
 		"nomad_botherer_nomad_api_errors_total",
 		"nomad_botherer_last_check_timestamp_seconds",
-		"nomad_botherer_job_diffs",
+		// nomad_botherer_job_diffs and nomad_botherer_job_drift_first_seen_timestamp_seconds
+		// have a dynamic "job" label and only appear after a Check call produces drift.
+		// They are exercised by TestMetrics_DiffCountersReflectState and
+		// TestMetrics_FirstSeenTimestamps.
 		"nomad_botherer_drifted_jobs",
-		"nomad_botherer_job_drift_first_seen_timestamp_seconds",
 		"nomad_botherer_nomad_staleness_checks_total",
 		"nomad_botherer_jobs_skipped_by_selector_total",
 	}

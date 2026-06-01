@@ -91,7 +91,7 @@ type Differ struct {
 // newDifferBase constructs a Differ with metrics registered into reg.
 func newDifferBase(jobs NomadJobsClient, namespace string, includeDeadJobs bool, jobSelectorGlob, managedMetaPrefix string, reg prometheus.Registerer) *Differ {
 	f := promauto.With(reg)
-	return &Differ{
+	d := &Differ{
 		jobs:              jobs,
 		namespace:         namespace,
 		includeDeadJobs:   includeDeadJobs,
@@ -143,6 +143,20 @@ func newDifferBase(jobs NomadJobsClient, namespace string, includeDeadJobs bool,
 			Help: "Unix timestamp when drift was first detected for each job. Cleared when drift resolves. Use time()-metric to get seconds in drift state.",
 		}, []string{"job", "diff_type"}),
 	}
+
+	// Pre-populate Vec metrics for all finite label values so they appear in
+	// Gather() output (with value 0) even before the first Check call.
+	for _, src := range []string{"hcl", "nomad"} {
+		d.jobsSkippedBySel.WithLabelValues(src)
+	}
+	for _, op := range []string{"list", "info", "plan"} {
+		d.nomadAPIErrors.WithLabelValues(op)
+	}
+	for _, dt := range []string{string(DiffTypeModified), string(DiffTypeMissingFromNomad), string(DiffTypeMissingFromHCL)} {
+		d.driftedJobs.WithLabelValues(dt)
+	}
+
+	return d
 }
 
 // NewDiffer creates a Differ backed by a real Nomad API client.
@@ -191,7 +205,13 @@ func (d *Differ) jobIsSelected(jobID string, meta map[string]string) bool {
 // Check compares the given HCL files (path → content) against the live Nomad
 // cluster and stores the results. commit is recorded for informational purposes.
 func (d *Differ) Check(hclFiles map[string]string, commit string) error {
-	q := &nomadapi.QueryOptions{Namespace: d.namespace}
+	// ?meta=true is documented in the Nomad HTTP API (GET /v1/jobs) and
+	// causes the list response to include each job's Meta map. Without it,
+	// Meta is omitted from the stub and meta-prefix selection cannot work.
+	q := &nomadapi.QueryOptions{
+		Namespace: d.namespace,
+		Params:    map[string]string{"meta": "true"},
+	}
 	wq := &nomadapi.WriteOptions{Namespace: d.namespace}
 
 	// List all Nomad jobs first. The returned Raft index lets us skip the
@@ -287,6 +307,12 @@ func (d *Differ) Check(hclFiles map[string]string, commit string) error {
 		}
 
 		// Job exists and is live — run a plan to detect config drift.
+		// Nomad's deregister call sets Stop=true on the job record. Copy it
+		// onto the HCL job so the plan does not report a Stop field diff.
+		if nomadJob.Stop != nil && *nomadJob.Stop {
+			stop := true
+			job.Stop = &stop
+		}
 		plan, _, err := d.jobs.Plan(job, true, wq)
 		if err != nil {
 			d.nomadAPIErrors.WithLabelValues("plan").Inc()
@@ -295,6 +321,13 @@ func (d *Differ) Check(hclFiles map[string]string, commit string) error {
 		}
 
 		if plan.Diff != nil && plan.Diff.Type != "" && plan.Diff.Type != "None" {
+			// For dead jobs, Nomad may return Type="Edited" with only task-group
+			// bookkeeping entries (Type="None" task groups). hasContentDiff filters
+			// those out so we don't report spurious drift.
+			isDead := nomadJob != nil && nomadJob.Status != nil && *nomadJob.Status == "dead"
+			if isDead && !hasContentDiff(plan.Diff) {
+				continue
+			}
 			diffs = append(diffs, JobDiff{
 				JobID:    jobID,
 				HCLFile:  filename,
@@ -313,7 +346,11 @@ func (d *Differ) Check(hclFiles map[string]string, commit string) error {
 		if !d.includeDeadJobs && j.Status == "dead" {
 			continue
 		}
-		if !d.jobIsSelected(j.ID, j.Meta) {
+
+		// Meta is populated because the List call includes ?meta=true.
+		meta := j.Meta
+
+		if !d.jobIsSelected(j.ID, meta) {
 			d.jobsSkippedBySel.WithLabelValues("nomad").Inc()
 			continue
 		}
@@ -414,6 +451,36 @@ func (d *Differ) Diffs() ([]JobDiff, time.Time, string) {
 	result := make([]JobDiff, len(d.diffs))
 	copy(result, d.diffs)
 	return result, d.lastCheckTime, d.lastCommit
+}
+
+// hasContentDiff reports whether d contains spec changes beyond allocation
+// bookkeeping entries. Used to suppress spurious diffs when planning HCL
+// against a dead job where task groups appear with Type="None" (no spec
+// change, only allocation count bookkeeping).
+//
+// Type="None" is defined in Nomad source (nomad/structs/diff.go, DiffTypeNone)
+// and is returned in plan responses when a task group has no spec changes.
+func hasContentDiff(d *nomadapi.JobDiff) bool {
+	if d == nil || d.Type == "" || d.Type == "None" {
+		return false
+	}
+	if len(d.Fields) > 0 || len(d.Objects) > 0 {
+		return true
+	}
+	for _, tg := range d.TaskGroups {
+		if tg.Type == "Added" || tg.Type == "Deleted" {
+			return true
+		}
+		if len(tg.Fields) > 0 || len(tg.Objects) > 0 {
+			return true
+		}
+		for _, task := range tg.Tasks {
+			if task.Type != "None" || len(task.Fields) > 0 || len(task.Objects) > 0 {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func isNotFound(err error) bool {

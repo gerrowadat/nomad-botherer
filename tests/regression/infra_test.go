@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -53,31 +54,87 @@ func startNomadDocker(version string) (addr string, cleanup func(), err error) {
 	addr = fmt.Sprintf("http://127.0.0.1:%d", port)
 	name := fmt.Sprintf("nomad-regression-%s", randomSuffix())
 
-	runCmd := exec.Command("docker", "run", "-d", "--rm",
-		"--name", name,
-		"--privileged", // required for cgroup management and raw_exec
-		"-p", fmt.Sprintf("%d:4646", port),
-		image,
-		"agent", "-dev",
-		"-bind=0.0.0.0",
-		"-log-level=error",
-	)
-	out, err := runCmd.Output()
+	runArgs, cfgPath, err := buildDockerRunArgs(name, image, port)
 	if err != nil {
+		return "", nil, err
+	}
+
+	out, err := exec.Command("docker", runArgs...).Output()
+	if err != nil {
+		if cfgPath != "" {
+			os.Remove(cfgPath)
+		}
 		return "", nil, fmt.Errorf("docker run: %w", err)
 	}
 	containerID := strings.TrimSpace(string(out))
 
 	cleanup = func() {
 		exec.Command("docker", "stop", "-t", "5", containerID).Run()
+		exec.Command("docker", "rm", "-f", containerID).Run()
+		if cfgPath != "" {
+			os.Remove(cfgPath)
+		}
 	}
 
 	if err := waitForNomadReady(addr, 90*time.Second); err != nil {
+		// Container may have already exited; capture logs before cleanup removes it.
+		logs, _ := exec.Command("docker", "logs", "--tail", "40", containerID).CombinedOutput()
 		cleanup()
-		return "", nil, fmt.Errorf("waiting for Nomad: %w", err)
+		return "", nil, fmt.Errorf("waiting for Nomad: %w\ncontainer logs:\n%s", err, logs)
 	}
 
 	return addr, cleanup, nil
+}
+
+// buildDockerRunArgs returns the argument slice for "docker run" to start a
+// Nomad dev agent. On Linux it uses host networking (avoiding Docker bridge
+// port-mapping issues in rootless and DinD environments) with a temporary
+// config file that pins the HTTP port. cfgPath is non-empty on Linux and must
+// be removed by the caller after the container exits. On other platforms the
+// original -p port-mapping approach is used.
+func buildDockerRunArgs(name, image string, port int) (args []string, cfgPath string, err error) {
+	if runtime.GOOS != "linux" {
+		return []string{
+			"run", "-d",
+			"--name", name,
+			"--privileged",
+			"-p", fmt.Sprintf("%d:4646", port),
+			image,
+			"agent", "-dev",
+			"-bind=0.0.0.0",
+			"-log-level=error",
+		}, "", nil
+	}
+
+	// Nomad has no CLI flag for the HTTP port; it must be set via a config
+	// file. Write a minimal one, mount it read-only, and pass -config.
+	f, ferr := os.CreateTemp("", "nomad-reg-*.hcl")
+	if ferr != nil {
+		return nil, "", fmt.Errorf("create nomad config: %w", ferr)
+	}
+	if _, ferr = fmt.Fprintf(f, "ports {\n  http = %d\n}\n", port); ferr != nil {
+		f.Close()
+		os.Remove(f.Name())
+		return nil, "", fmt.Errorf("write nomad config: %w", ferr)
+	}
+	f.Close()
+
+	return []string{
+		"run", "-d",
+		"--name", name,
+		"--privileged",
+		"--network=host",
+		// cgroupns=host is required on cgroupv2 systems: without it Docker
+		// creates a private cgroup namespace and Nomad cannot write to
+		// cgroup.subtree_control to set up its own process manager.
+		"--cgroupns=host",
+		"-v", f.Name() + ":/nomad-reg.hcl:ro",
+		image,
+		"agent", "-dev",
+		"-bind=0.0.0.0",
+		"-config=/nomad-reg.hcl",
+		"-log-level=error",
+	}, f.Name(), nil
 }
 
 // waitForNomadReady polls /v1/agent/self until it returns 200.
@@ -340,13 +397,17 @@ job %q {
 }
 
 // testJobHCLWithMeta adds a gitops meta key that marks the job as managed.
+// The meta key contains a dot (e.g. "gitops.managed"), which is not a valid
+// HCL2 identifier and therefore cannot appear as an unquoted attribute name in
+// a block body. Using the object-expression form (meta = { ... }) allows
+// quoted keys and is accepted by Nomad's ParseHCL endpoint.
 func testJobHCLWithMeta(jobID, metaPrefix string) string {
 	return fmt.Sprintf(`
 job %q {
   datacenters = ["dc1"]
   type        = "service"
 
-  meta {
+  meta = {
     %q = "true"
   }
 
