@@ -24,6 +24,7 @@
 ### Testing
 
 - Added a full regression test suite (`tests/regression/`) covering drift detection, end-to-end HTTP and gRPC flows, Prometheus metrics, webhook handling, security behaviours, and job selection. The suite runs against a real Nomad instance and is tagged `//go:build regression` so it does not run in CI by default. See the Testing section of the README for how to run it.
+- Verified against Nomad 1.9.6, 1.10.5, 1.11.3, and 2.0.2. All tests pass on all four versions.
 
 ### Documentation
 
