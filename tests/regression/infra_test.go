@@ -486,6 +486,9 @@ type mockDiffSource struct {
 func (m *mockDiffSource) Diffs() ([]nomad.JobDiff, time.Time, string) {
 	return m.diffs, time.Now(), "deadbeef"
 }
+func (m *mockDiffSource) SelectedJobs() ([]nomad.SelectedJob, time.Time, string) {
+	return nil, time.Now(), "deadbeef"
+}
 func (m *mockDiffSource) Ready() bool { return m.ready }
 
 type mockGitSource struct {
