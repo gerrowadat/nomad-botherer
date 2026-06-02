@@ -71,6 +71,15 @@ type JobDiff struct {
 	PlanDiff *nomadapi.JobDiff `json:"-"`
 }
 
+// hclEntry is a parsed HCL job that has passed the preliminary selection filter.
+// Final selection (using live Nomad meta) is applied in checkHCLCandidate.
+type hclEntry struct {
+	job     *nomadapi.Job
+	file    string
+	globSel bool // matched by job-selector-glob
+	metaHCL bool // managed meta key present in parsed HCL
+}
+
 // NomadJobsClient is the subset of the Nomad API jobs client we use.
 // The concrete *nomadapi.Jobs satisfies this interface; tests inject a mock.
 type NomadJobsClient interface {
@@ -93,25 +102,25 @@ type Differ struct {
 	// fallback only when the job does not yet exist in Nomad.
 	metaHCLCanonical bool
 
-	mu              sync.RWMutex
-	diffs           []JobDiff
-	selectedJobs    []SelectedJob
-	lastCheckTime   time.Time
-	lastCommit      string
-	lastNomadIndex  uint64               // Raft index from the last successful List(); protected by mu
-	driftFirstSeen  map[string]time.Time // key: driftKey(jobID, diffType); protected by mu
+	mu             sync.RWMutex
+	diffs          []JobDiff
+	selectedJobs   []SelectedJob
+	lastCheckTime  time.Time
+	lastCommit     string
+	lastNomadIndex uint64               // Raft index from the last successful List(); protected by mu
+	driftFirstSeen map[string]time.Time // key: driftKey(jobID, diffType); protected by mu
 
-	hclParseErrors      prometheus.Counter
-	hclFilesSkipped     prometheus.Counter
-	diffChecks          prometheus.Counter
-	diffChecksSkipped   prometheus.Counter
-	staleChecks         prometheus.Counter
-	jobsSkippedBySel    *prometheus.CounterVec
-	nomadAPIErrors      *prometheus.CounterVec
-	lastCheck           prometheus.Gauge
-	jobDiffs            *prometheus.GaugeVec
-	driftedJobs         *prometheus.GaugeVec
-	jobDriftSince       *prometheus.GaugeVec
+	hclParseErrors   prometheus.Counter
+	hclFilesSkipped  prometheus.Counter
+	diffChecks       prometheus.Counter
+	diffChecksSkipped prometheus.Counter
+	staleChecks      prometheus.Counter
+	jobsSkippedBySel *prometheus.CounterVec
+	nomadAPIErrors   *prometheus.CounterVec
+	lastCheck        prometheus.Gauge
+	jobDiffs         *prometheus.GaugeVec
+	driftedJobs      *prometheus.GaugeVec
+	jobDriftSince    *prometheus.GaugeVec
 }
 
 // newDifferBase constructs a Differ with metrics registered into reg.
@@ -213,37 +222,44 @@ func NewWithClientAndRegistry(cfg *config.Config, jobs NomadJobsClient, reg prom
 	return newDifferBase(jobs, cfg.NomadNamespace, cfg.IncludeDeadJobs, cfg.JobSelectorGlob, cfg.ManagedMetaPrefix, cfg.ManagedMetaHCLCanonical, reg)
 }
 
-// jobSelectionReason reports whether a job should be watched and, if so, why.
-// A job is selected when its ID matches the configured glob pattern, when its
-// meta map contains "<managedMetaPrefix>_managed" set to "true", or both.
-// Returns false and an empty reason when neither criterion matches.
-func (d *Differ) jobSelectionReason(jobID string, meta map[string]string) (bool, SelectionReason) {
-	glob := d.jobSelectorGlob != ""
-	if glob {
-		matched, _ := path.Match(d.jobSelectorGlob, jobID)
-		glob = matched
-	}
-	meta_ := d.managedMetaPrefix != "" && meta[d.managedMetaPrefix+"_managed"] == "true"
+// metaKeyPresent reports whether the managed meta key is set in meta.
+func (d *Differ) metaKeyPresent(meta map[string]string) bool {
+	return d.managedMetaPrefix != "" && meta[d.managedMetaPrefix+"_managed"] == "true"
+}
+
+// selectionReasonFor maps a (glob match, meta match) pair to a SelectionReason.
+// Returns (false, "") when neither criterion is met.
+func selectionReasonFor(glob, meta bool) (bool, SelectionReason) {
 	switch {
-	case glob && meta_:
+	case glob && meta:
 		return true, SelectionReasonBoth
 	case glob:
 		return true, SelectionReasonGlob
-	case meta_:
+	case meta:
 		return true, SelectionReasonMeta
 	default:
 		return false, ""
 	}
 }
 
+// jobSelectionReason reports whether a job should be watched and, if so, why.
+func (d *Differ) jobSelectionReason(jobID string, meta map[string]string) (bool, SelectionReason) {
+	glob := d.jobSelectorGlob != ""
+	if glob {
+		matched, _ := path.Match(d.jobSelectorGlob, jobID)
+		glob = matched
+	}
+	return selectionReasonFor(glob, d.metaKeyPresent(meta))
+}
+
 // mergeSelectionReason returns the combined reason when a job is seen from
 // multiple sources (e.g. HCL phase and Nomad phase). Any combination of two
 // different non-empty reasons upgrades to SelectionReasonBoth.
-func mergeSelectionReason(existing, new SelectionReason) SelectionReason {
+func mergeSelectionReason(existing, incoming SelectionReason) SelectionReason {
 	if existing == "" {
-		return new
+		return incoming
 	}
-	if existing == new {
+	if existing == incoming {
 		return existing
 	}
 	return SelectionReasonBoth
@@ -259,6 +275,186 @@ func (d *Differ) SelectedJobs() ([]SelectedJob, time.Time, string) {
 	result := make([]SelectedJob, len(d.selectedJobs))
 	copy(result, d.selectedJobs)
 	return result, d.lastCheckTime, d.lastCommit
+}
+
+// parseHCLCandidates parses all HCL files and returns those that pass the
+// preliminary selection filter (glob match or managed meta key in HCL).
+// Final selection against live Nomad state is done later in checkHCLCandidate.
+func (d *Differ) parseHCLCandidates(hclFiles map[string]string) map[string]hclEntry {
+	entries := make(map[string]hclEntry)
+	for filename, content := range hclFiles {
+		if !jobBlockRe.MatchString(content) {
+			slog.Debug("Skipping HCL file with no job stanza", "file", filename)
+			d.hclFilesSkipped.Inc()
+			continue
+		}
+		job, err := d.jobs.ParseHCL(content, true)
+		if err != nil {
+			slog.Warn("Failed to parse HCL file, skipping", "file", filename, "err", err)
+			d.hclParseErrors.Inc()
+			continue
+		}
+		if job == nil || job.ID == nil || *job.ID == "" {
+			slog.Warn("HCL file yielded no job ID, skipping", "file", filename)
+			continue
+		}
+		jobID := *job.ID
+
+		globSel := d.jobSelectorGlob != ""
+		if globSel {
+			globSel, _ = path.Match(d.jobSelectorGlob, jobID)
+		}
+		metaHCL := d.metaKeyPresent(job.Meta)
+
+		if !globSel && !metaHCL {
+			slog.Debug("Skipping job not matching selection criteria", "job", jobID, "file", filename)
+			d.jobsSkippedBySel.WithLabelValues("hcl").Inc()
+			continue
+		}
+		entries[jobID] = hclEntry{job: job, file: filename, globSel: globSel, metaHCL: metaHCL}
+		slog.Debug("Parsed HCL file", "file", filename, "job_id", jobID)
+	}
+	return entries
+}
+
+// checkHCLCandidate applies final selection against the live Nomad job, then
+// runs Info + Plan to produce a diff. Returns (false, "", nil) when the job
+// should be skipped; returns (true, reason, nil) when selected but no diff was
+// found; returns (true, reason, &diff) when a diff was detected.
+func (d *Differ) checkHCLCandidate(jobID string, entry hclEntry, q *nomadapi.QueryOptions, wq *nomadapi.WriteOptions) (bool, SelectionReason, *JobDiff) {
+	nomadJob, _, infoErr := d.jobs.Info(jobID, q)
+	notFound := infoErr != nil && isNotFound(infoErr)
+
+	// When metaHCLCanonical is false (the default), the live job's meta is
+	// authoritative. For jobs not yet in Nomad, fall back to the HCL meta.
+	metaSelected := entry.metaHCL
+	if !d.metaHCLCanonical && !notFound && infoErr == nil {
+		metaSelected = nomadJob != nil && d.metaKeyPresent(nomadJob.Meta)
+	}
+
+	selected, reason := selectionReasonFor(entry.globSel, metaSelected)
+	if !selected {
+		slog.Debug("Skipping HCL job: managed meta key absent from live Nomad job", "job", jobID)
+		d.jobsSkippedBySel.WithLabelValues("hcl").Inc()
+		return false, "", nil
+	}
+
+	if notFound {
+		return true, reason, &JobDiff{
+			JobID:    jobID,
+			HCLFile:  entry.file,
+			DiffType: DiffTypeMissingFromNomad,
+			Detail:   "job is defined in HCL but not registered in Nomad",
+		}
+	}
+	if infoErr != nil {
+		d.nomadAPIErrors.WithLabelValues("info").Inc()
+		slog.Warn("Failed to query job from Nomad", "job", jobID, "err", infoErr)
+		return true, reason, nil
+	}
+
+	// Unless the caller explicitly wants dead jobs included, treat a dead
+	// job the same as a missing one.
+	if !d.includeDeadJobs && nomadJob != nil && nomadJob.Status != nil && *nomadJob.Status == "dead" {
+		slog.Debug("Job is dead in Nomad, treating as missing", "job", jobID)
+		return true, reason, &JobDiff{
+			JobID:    jobID,
+			HCLFile:  entry.file,
+			DiffType: DiffTypeMissingFromNomad,
+			Detail:   "job is defined in HCL but is in 'dead' state in Nomad",
+		}
+	}
+
+	// Job exists and is live — run a plan to detect config drift.
+	// Nomad's deregister call sets Stop=true on the job record. Copy it
+	// onto the HCL job so the plan does not report a Stop field diff.
+	job := entry.job
+	if nomadJob.Stop != nil && *nomadJob.Stop {
+		stop := true
+		job.Stop = &stop
+	}
+	plan, _, err := d.jobs.Plan(job, true, wq)
+	if err != nil {
+		d.nomadAPIErrors.WithLabelValues("plan").Inc()
+		slog.Warn("Failed to plan job", "job", jobID, "err", err)
+		return true, reason, nil
+	}
+
+	if plan.Diff != nil && plan.Diff.Type != "" && plan.Diff.Type != "None" {
+		// For dead jobs, Nomad may return Type="Edited" with only task-group
+		// bookkeeping entries (Type="None" task groups). hasContentDiff filters
+		// those out so we don't report spurious drift.
+		isDead := nomadJob != nil && nomadJob.Status != nil && *nomadJob.Status == "dead"
+		if isDead && !hasContentDiff(plan.Diff) {
+			return true, reason, nil
+		}
+		return true, reason, &JobDiff{
+			JobID:    jobID,
+			HCLFile:  entry.file,
+			DiffType: DiffTypeModified,
+			Detail:   fmt.Sprintf("Nomad plan shows diff type %q", plan.Diff.Type),
+			PlanDiff: plan.Diff,
+		}
+	}
+	return true, reason, nil
+}
+
+// commitResults stores the computed diffs and updates drift tracking and metrics.
+// It is called at the end of each Check to atomically publish new state.
+func (d *Differ) commitResults(diffs []JobDiff, selReasons map[string]SelectionReason, commit string, listMeta *nomadapi.QueryMeta, now time.Time) {
+	currentKeys := make(map[string]struct{}, len(diffs))
+	for _, diff := range diffs {
+		currentKeys[driftKey(diff.JobID, string(diff.DiffType))] = struct{}{}
+	}
+
+	selectedJobs := make([]SelectedJob, 0, len(selReasons))
+	for jobID, reason := range selReasons {
+		selectedJobs = append(selectedJobs, SelectedJob{JobID: jobID, Reason: reason})
+	}
+	sort.Slice(selectedJobs, func(i, j int) bool { return selectedJobs[i].JobID < selectedJobs[j].JobID })
+
+	d.mu.Lock()
+	d.diffs = diffs
+	d.selectedJobs = selectedJobs
+	d.lastCheckTime = now
+	d.lastCommit = commit
+	if listMeta != nil {
+		d.lastNomadIndex = listMeta.LastIndex
+	}
+	for k := range d.driftFirstSeen {
+		if _, ok := currentKeys[k]; !ok {
+			delete(d.driftFirstSeen, k)
+		}
+	}
+	for k := range currentKeys {
+		if _, ok := d.driftFirstSeen[k]; !ok {
+			d.driftFirstSeen[k] = now
+		}
+	}
+	firstSeenSnapshot := make(map[string]time.Time, len(d.driftFirstSeen))
+	for k, v := range d.driftFirstSeen {
+		firstSeenSnapshot[k] = v
+	}
+	d.mu.Unlock()
+
+	d.lastCheck.Set(float64(now.Unix()))
+	d.jobDiffs.Reset()
+	d.driftedJobs.Reset()
+	d.jobDriftSince.Reset()
+	typeCounts := make(map[string]int)
+	for _, diff := range diffs {
+		d.jobDiffs.WithLabelValues(diff.JobID, string(diff.DiffType)).Set(1)
+		typeCounts[string(diff.DiffType)]++
+	}
+	for typ, count := range typeCounts {
+		d.driftedJobs.WithLabelValues(typ).Set(float64(count))
+	}
+	for _, diff := range diffs {
+		k := driftKey(diff.JobID, string(diff.DiffType))
+		if t, ok := firstSeenSnapshot[k]; ok {
+			d.jobDriftSince.WithLabelValues(diff.JobID, string(diff.DiffType)).Set(float64(t.Unix()))
+		}
+	}
 }
 
 // Check compares the given HCL files (path → content) against the live Nomad
@@ -298,156 +494,22 @@ func (d *Differ) Check(hclFiles map[string]string, commit string) error {
 	slog.Info("Running diff check", "commit", commit, "hcl_files", len(hclFiles))
 	d.diffChecks.Inc()
 
-	// Parse all HCL files via the Nomad API into preliminary candidates.
-	// Candidates are jobs where the glob matches OR the managed meta key is
-	// present in the HCL. Final selection (using the live job's meta when
-	// metaHCLCanonical is false) is deferred to the combined selection+plan loop.
-	type hclEntry struct {
-		job     *nomadapi.Job
-		file    string
-		globSel bool // matched by job-selector-glob
-		metaHCL bool // managed meta key present in parsed HCL
-	}
-	hclEntries := make(map[string]hclEntry)
-
-	for filename, content := range hclFiles {
-		if !jobBlockRe.MatchString(content) {
-			slog.Debug("Skipping HCL file with no job stanza", "file", filename)
-			d.hclFilesSkipped.Inc()
-			continue
-		}
-
-		job, err := d.jobs.ParseHCL(content, true)
-		if err != nil {
-			slog.Warn("Failed to parse HCL file, skipping", "file", filename, "err", err)
-			d.hclParseErrors.Inc()
-			continue
-		}
-		if job == nil || job.ID == nil || *job.ID == "" {
-			slog.Warn("HCL file yielded no job ID, skipping", "file", filename)
-			continue
-		}
-		jobID := *job.ID
-
-		globSel := false
-		if d.jobSelectorGlob != "" {
-			globSel, _ = path.Match(d.jobSelectorGlob, jobID)
-		}
-		metaHCL := d.managedMetaPrefix != "" && job.Meta[d.managedMetaPrefix+"_managed"] == "true"
-
-		if !globSel && !metaHCL {
-			slog.Debug("Skipping job not matching selection criteria", "job", jobID, "file", filename)
-			d.jobsSkippedBySel.WithLabelValues("hcl").Inc()
-			continue
-		}
-		hclEntries[jobID] = hclEntry{job: job, file: filename, globSel: globSel, metaHCL: metaHCL}
-		slog.Debug("Parsed HCL file", "file", filename, "job_id", jobID)
-	}
-
-	// hclJobs records all HCL jobs that passed final selection.
-	// Used by the Nomad-list phase below to detect missing_from_hcl.
-	hclJobs := make(map[string]*nomadapi.Job, len(hclEntries))
-	hclJobFile := make(map[string]string, len(hclEntries))
-	// selReasons accumulates the selection reason across both phases.
+	hclEntries := d.parseHCLCandidates(hclFiles)
+	// hclJobSet tracks jobs that passed HCL-phase selection; used below to
+	// detect jobs running in Nomad that have no corresponding HCL file.
+	hclJobSet := make(map[string]struct{}, len(hclEntries))
 	selReasons := make(map[string]SelectionReason)
-
 	var diffs []JobDiff
 
-	// For each HCL candidate: determine final selection then diff against Nomad.
 	for jobID, entry := range hclEntries {
-		nomadJob, _, infoErr := d.jobs.Info(jobID, q)
-		notFound := infoErr != nil && isNotFound(infoErr)
-
-		// Determine final selection. When metaHCLCanonical is false (the
-		// default), the live job's meta is authoritative. For jobs that do not
-		// yet exist in Nomad, the HCL meta is used as a fallback since there is
-		// no live state to consult.
-		metaSelected := entry.metaHCL // HCL meta (used when HCL-canonical or job is missing)
-		if !d.metaHCLCanonical && !notFound && infoErr == nil {
-			// Nomad-canonical and job exists: check live meta instead.
-			metaSelected = d.managedMetaPrefix != "" && nomadJob != nil && nomadJob.Meta[d.managedMetaPrefix+"_managed"] == "true"
-		}
-
-		var finalSel bool
-		var reason SelectionReason
-		switch {
-		case entry.globSel && metaSelected:
-			finalSel, reason = true, SelectionReasonBoth
-		case entry.globSel:
-			finalSel, reason = true, SelectionReasonGlob
-		case metaSelected:
-			finalSel, reason = true, SelectionReasonMeta
-		}
-
-		if !finalSel {
-			slog.Debug("Skipping HCL job: managed meta key absent from live Nomad job", "job", jobID)
-			d.jobsSkippedBySel.WithLabelValues("hcl").Inc()
+		selected, reason, diff := d.checkHCLCandidate(jobID, entry, q, wq)
+		if !selected {
 			continue
 		}
-
 		selReasons[jobID] = mergeSelectionReason(selReasons[jobID], reason)
-		hclJobs[jobID] = entry.job
-		hclJobFile[jobID] = entry.file
-
-		// Handle Info() error outcomes.
-		if notFound {
-			diffs = append(diffs, JobDiff{
-				JobID:    jobID,
-				HCLFile:  entry.file,
-				DiffType: DiffTypeMissingFromNomad,
-				Detail:   "job is defined in HCL but not registered in Nomad",
-			})
-			continue
-		}
-		if infoErr != nil {
-			d.nomadAPIErrors.WithLabelValues("info").Inc()
-			slog.Warn("Failed to query job from Nomad", "job", jobID, "err", infoErr)
-			continue
-		}
-
-		// Unless the caller explicitly wants dead jobs included, treat a dead
-		// job the same as a missing one.
-		if !d.includeDeadJobs && nomadJob != nil && nomadJob.Status != nil && *nomadJob.Status == "dead" {
-			slog.Debug("Job is dead in Nomad, treating as missing", "job", jobID)
-			diffs = append(diffs, JobDiff{
-				JobID:    jobID,
-				HCLFile:  entry.file,
-				DiffType: DiffTypeMissingFromNomad,
-				Detail:   "job is defined in HCL but is in 'dead' state in Nomad",
-			})
-			continue
-		}
-
-		// Job exists and is live — run a plan to detect config drift.
-		// Nomad's deregister call sets Stop=true on the job record. Copy it
-		// onto the HCL job so the plan does not report a Stop field diff.
-		job := entry.job
-		if nomadJob.Stop != nil && *nomadJob.Stop {
-			stop := true
-			job.Stop = &stop
-		}
-		plan, _, err := d.jobs.Plan(job, true, wq)
-		if err != nil {
-			d.nomadAPIErrors.WithLabelValues("plan").Inc()
-			slog.Warn("Failed to plan job", "job", jobID, "err", err)
-			continue
-		}
-
-		if plan.Diff != nil && plan.Diff.Type != "" && plan.Diff.Type != "None" {
-			// For dead jobs, Nomad may return Type="Edited" with only task-group
-			// bookkeeping entries (Type="None" task groups). hasContentDiff filters
-			// those out so we don't report spurious drift.
-			isDead := nomadJob != nil && nomadJob.Status != nil && *nomadJob.Status == "dead"
-			if isDead && !hasContentDiff(plan.Diff) {
-				continue
-			}
-			diffs = append(diffs, JobDiff{
-				JobID:    jobID,
-				HCLFile:  entry.file,
-				DiffType: DiffTypeModified,
-				Detail:   fmt.Sprintf("Nomad plan shows diff type %q", plan.Diff.Type),
-				PlanDiff: plan.Diff,
-			})
+		hclJobSet[jobID] = struct{}{}
+		if diff != nil {
+			diffs = append(diffs, *diff)
 		}
 	}
 
@@ -459,17 +521,14 @@ func (d *Differ) Check(hclFiles map[string]string, commit string) error {
 		if !d.includeDeadJobs && j.Status == "dead" {
 			continue
 		}
-
 		// Meta is populated because the List call includes ?meta=true.
-		meta := j.Meta
-
-		selected, reason := d.jobSelectionReason(j.ID, meta)
+		selected, reason := d.jobSelectionReason(j.ID, j.Meta)
 		if !selected {
 			d.jobsSkippedBySel.WithLabelValues("nomad").Inc()
 			continue
 		}
 		selReasons[j.ID] = mergeSelectionReason(selReasons[j.ID], reason)
-		if _, ok := hclJobs[j.ID]; !ok {
+		if _, ok := hclJobSet[j.ID]; !ok {
 			diffs = append(diffs, JobDiff{
 				JobID:    j.ID,
 				DiffType: DiffTypeMissingFromHCL,
@@ -478,68 +537,7 @@ func (d *Differ) Check(hclFiles map[string]string, commit string) error {
 		}
 	}
 
-	now := time.Now()
-
-	// Build the set of currently-drifting job+type keys.
-	currentKeys := make(map[string]struct{}, len(diffs))
-	for _, diff := range diffs {
-		currentKeys[driftKey(diff.JobID, string(diff.DiffType))] = struct{}{}
-	}
-
-	// Build sorted SelectedJob slice from the accumulated reasons map.
-	selectedJobs := make([]SelectedJob, 0, len(selReasons))
-	for jobID, reason := range selReasons {
-		selectedJobs = append(selectedJobs, SelectedJob{JobID: jobID, Reason: reason})
-	}
-	sort.Slice(selectedJobs, func(i, j int) bool { return selectedJobs[i].JobID < selectedJobs[j].JobID })
-
-	d.mu.Lock()
-	d.diffs = diffs
-	d.selectedJobs = selectedJobs
-	d.lastCheckTime = now
-	d.lastCommit = commit
-	if listMeta != nil {
-		d.lastNomadIndex = listMeta.LastIndex
-	}
-
-	// Remove entries that are no longer drifting.
-	for k := range d.driftFirstSeen {
-		if _, ok := currentKeys[k]; !ok {
-			delete(d.driftFirstSeen, k)
-		}
-	}
-	// Record the first time each new drift is observed.
-	for k := range currentKeys {
-		if _, ok := d.driftFirstSeen[k]; !ok {
-			d.driftFirstSeen[k] = now
-		}
-	}
-	// Snapshot first-seen times for metric updates below (outside the lock).
-	firstSeenSnapshot := make(map[string]time.Time, len(d.driftFirstSeen))
-	for k, v := range d.driftFirstSeen {
-		firstSeenSnapshot[k] = v
-	}
-	d.mu.Unlock()
-
-	d.lastCheck.Set(float64(now.Unix()))
-	d.jobDiffs.Reset()
-	d.driftedJobs.Reset()
-	d.jobDriftSince.Reset()
-	typeCounts := make(map[string]int)
-	for _, diff := range diffs {
-		d.jobDiffs.WithLabelValues(diff.JobID, string(diff.DiffType)).Set(1)
-		typeCounts[string(diff.DiffType)]++
-	}
-	for typ, count := range typeCounts {
-		d.driftedJobs.WithLabelValues(typ).Set(float64(count))
-	}
-	for _, diff := range diffs {
-		k := driftKey(diff.JobID, string(diff.DiffType))
-		if t, ok := firstSeenSnapshot[k]; ok {
-			d.jobDriftSince.WithLabelValues(diff.JobID, string(diff.DiffType)).Set(float64(t.Unix()))
-		}
-	}
-
+	d.commitResults(diffs, selReasons, commit, listMeta, time.Now())
 	slog.Info("Diff check complete", "diffs", len(diffs), "commit", commit)
 	return nil
 }

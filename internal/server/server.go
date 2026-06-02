@@ -352,6 +352,16 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
+// recordWebhookOutcome records the current time into field under the webhook
+// mutex and updates the corresponding Prometheus gauge.
+func (s *Server) recordWebhookOutcome(field *time.Time, gauge prometheus.Gauge) {
+	now := time.Now()
+	s.webhookMu.Lock()
+	*field = now
+	s.webhookMu.Unlock()
+	gauge.Set(float64(now.Unix()))
+}
+
 func (s *Server) handleWebhook() http.HandlerFunc {
 	if s.cfg.WebhookSecret == "" {
 		slog.Warn("Webhook secret is empty: webhook endpoint accepts unsigned requests. " +
@@ -380,11 +390,7 @@ func (s *Server) handleWebhook() http.HandlerFunc {
 			}
 			s.webhookEvents.WithLabelValues("error").Inc()
 			slog.Warn("Webhook rejected", "event", eventType, "delivery", deliveryID, "err", err)
-			now := time.Now()
-			s.webhookMu.Lock()
-			s.lastWebhookFailure = now
-			s.webhookMu.Unlock()
-			s.lastWebhookFailureGauge.Set(float64(now.Unix()))
+			s.recordWebhookOutcome(&s.lastWebhookFailure, s.lastWebhookFailureGauge)
 			http.Error(w, "bad webhook payload", http.StatusBadRequest)
 			return
 		}
@@ -416,11 +422,7 @@ func (s *Server) handleWebhook() http.HandlerFunc {
 			)
 		}
 
-		now := time.Now()
-		s.webhookMu.Lock()
-		s.lastWebhookSuccess = now
-		s.webhookMu.Unlock()
-		s.lastWebhookSuccessGauge.Set(float64(now.Unix()))
+		s.recordWebhookOutcome(&s.lastWebhookSuccess, s.lastWebhookSuccessGauge)
 
 		w.WriteHeader(http.StatusOK)
 	}

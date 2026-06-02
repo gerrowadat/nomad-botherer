@@ -88,6 +88,19 @@ func (cfg *rootConfig) dial() (grpcapi.NomadBothererClient, func(), error) {
 	return grpcapi.NewNomadBothererClient(conn), func() { conn.Close() }, nil
 }
 
+// withClient dials the server, creates a timeout context, calls fn, and cleans
+// up. It centralises the boilerplate that every command needs.
+func (cfg *rootConfig) withClient(fn func(context.Context, grpcapi.NomadBothererClient) error) error {
+	client, close, err := cfg.dial()
+	if err != nil {
+		return err
+	}
+	defer close()
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.timeout)
+	defer cancel()
+	return fn(ctx, client)
+}
+
 // bearerCreds injects the API key into every outgoing RPC as a Bearer token.
 type bearerCreds struct{ key string }
 
