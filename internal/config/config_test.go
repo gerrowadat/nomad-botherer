@@ -250,8 +250,8 @@ func TestLoadFromArgs_GRPCDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.GRPCListenAddr != ":9090" {
-		t.Errorf("GRPCListenAddr: want :9090, got %q", cfg.GRPCListenAddr)
+	if cfg.GRPCListenAddr != "" {
+		t.Errorf("GRPCListenAddr: want empty (disabled by default), got %q", cfg.GRPCListenAddr)
 	}
 	if cfg.GRPCAPIKey != "" {
 		t.Errorf("GRPCAPIKey: want empty, got %q", cfg.GRPCAPIKey)

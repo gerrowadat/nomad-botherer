@@ -199,8 +199,8 @@ Every flag has a corresponding environment variable. Environment variables are r
 | `--listen-addr` | `LISTEN_ADDR` | `:8080` | HTTP listen address |
 | `--webhook-secret` | `WEBHOOK_SECRET` | | GitHub webhook HMAC secret |
 | `--webhook-path` | `WEBHOOK_PATH` | `/webhook` | Webhook endpoint path |
-| `--grpc-listen-addr` | `GRPC_LISTEN_ADDR` | `:9090` | gRPC listen address. Set to empty string (`""`) to disable the gRPC server |
-| `--grpc-api-key` | `GRPC_API_KEY` | | Pre-shared API key for gRPC authentication. Required when `--grpc-listen-addr` is non-empty |
+| `--grpc-listen-addr` | `GRPC_LISTEN_ADDR` | *(empty — disabled)* | gRPC listen address. Set to a non-empty value (e.g. `:9090`) to enable the gRPC server. Requires `--grpc-api-key`. |
+| `--grpc-api-key` | `GRPC_API_KEY` | | Pre-shared API key for gRPC authentication. Required when `--grpc-listen-addr` is set. |
 | `--diff-interval` | `DIFF_INTERVAL` | `1m` | Periodic Nomad-side drift check interval |
 | `--include-dead-jobs` | `INCLUDE_DEAD_JOBS` | `false` | Treat dead Nomad jobs like running ones (by default dead jobs count as missing) |
 | `--job-selector-glob` | `JOB_SELECTOR_GLOB` | *(empty — no glob)* | Glob pattern selecting jobs to watch by name (e.g. `myprefix-*`, `*` for all). Combined with `--managed-meta-prefix` as a union. |
@@ -234,9 +234,9 @@ If `--webhook-secret` is empty, signature verification is skipped. In production
 
 ## gRPC API
 
-nomad-botherer exposes a gRPC server on `--grpc-listen-addr` (default `:9090`).
-The server starts automatically unless the address is set to an empty string.
-Setting a non-empty address without also setting an API key is a startup error.
+The gRPC server is disabled by default. Enable it by setting `--grpc-listen-addr`
+to a listen address (e.g. `:9090`) and providing an API key via `--grpc-api-key`.
+Setting an address without an API key is a startup error.
 
 The service is defined in [`proto/nomad_botherer.proto`](proto/nomad_botherer.proto).
 Go bindings are pre-generated in `internal/grpcapi/` — no code generation is required
@@ -624,9 +624,7 @@ docker run -d \
   -e GIT_TOKEN=ghp_... \
   -e NOMAD_ADDR=http://nomad.example.com:4646 \
   -e NOMAD_TOKEN=... \
-  -e GRPC_API_KEY=your-api-key \
   -p 8080:8080 \
-  -p 9090:9090 \
   ghcr.io/gerrowadat/nomad-botherer:latest
 ```
 
@@ -638,13 +636,11 @@ docker run -d \
   -e GIT_SSH_KEY=/run/secrets/ssh_key \
   -v /path/to/id_ed25519:/run/secrets/ssh_key:ro \
   -e NOMAD_ADDR=http://nomad.example.com:4646 \
-  -e GRPC_API_KEY=your-api-key \
   -p 8080:8080 \
-  -p 9090:9090 \
   ghcr.io/gerrowadat/nomad-botherer:latest
 ```
 
-Omit `-e GRPC_API_KEY` and `-p 9090:9090` if you do not need the gRPC API.
+To enable the gRPC API, add `-e GRPC_LISTEN_ADDR=:9090 -e GRPC_API_KEY=your-api-key -p 9090:9090`.
 
 Supported platforms: `linux/amd64`, `linux/arm64` (Raspberry Pi 4+).
 
