@@ -151,10 +151,27 @@ func (s *Server) authInterceptor(ctx context.Context, req any, info *grpc.UnaryS
 	return resp, err
 }
 
+// checkReady returns an Unavailable error if either the git watcher or the
+// differ has not yet completed its initial run.
+func (s *Server) checkReady() error {
+	if !s.git.Ready() || !s.diffs.Ready() {
+		return status.Error(codes.Unavailable, "server is not ready: initial state not yet built")
+	}
+	return nil
+}
+
+// fmtTime formats t as UTC RFC3339, returning "" for the zero time.
+func fmtTime(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339)
+}
+
 // GetDiffs returns the latest set of job diffs.
 func (s *Server) GetDiffs(_ context.Context, _ *grpcapi.GetDiffsRequest) (*grpcapi.GetDiffsResponse, error) {
-	if !s.git.Ready() || !s.diffs.Ready() {
-		return nil, status.Error(codes.Unavailable, "server is not ready: initial state not yet built")
+	if err := s.checkReady(); err != nil {
+		return nil, err
 	}
 	diffs, lastCheck, lastCommit := s.diffs.Diffs()
 
@@ -167,22 +184,18 @@ func (s *Server) GetDiffs(_ context.Context, _ *grpcapi.GetDiffsRequest) (*grpca
 			Detail:   d.Detail,
 		})
 	}
-
-	resp := &grpcapi.GetDiffsResponse{
-		Diffs:      pbDiffs,
-		LastCommit: lastCommit,
-	}
-	if !lastCheck.IsZero() {
-		resp.LastCheckTime = lastCheck.UTC().Format(time.RFC3339)
-	}
-	return resp, nil
+	return &grpcapi.GetDiffsResponse{
+		Diffs:         pbDiffs,
+		LastCommit:    lastCommit,
+		LastCheckTime: fmtTime(lastCheck),
+	}, nil
 }
 
 // GetSelectedJobs returns the jobs that matched the configured selection criteria
 // during the last check, together with the reason each was included.
 func (s *Server) GetSelectedJobs(_ context.Context, _ *grpcapi.GetSelectedJobsRequest) (*grpcapi.GetSelectedJobsResponse, error) {
-	if !s.git.Ready() || !s.diffs.Ready() {
-		return nil, status.Error(codes.Unavailable, "server is not ready: initial state not yet built")
+	if err := s.checkReady(); err != nil {
+		return nil, err
 	}
 	jobs, lastCheck, lastCommit := s.diffs.SelectedJobs()
 
@@ -193,15 +206,11 @@ func (s *Server) GetSelectedJobs(_ context.Context, _ *grpcapi.GetSelectedJobsRe
 			SelectionReason: string(j.Reason),
 		})
 	}
-
-	resp := &grpcapi.GetSelectedJobsResponse{
-		Jobs:       pbJobs,
-		LastCommit: lastCommit,
-	}
-	if !lastCheck.IsZero() {
-		resp.LastCheckTime = lastCheck.UTC().Format(time.RFC3339)
-	}
-	return resp, nil
+	return &grpcapi.GetSelectedJobsResponse{
+		Jobs:          pbJobs,
+		LastCommit:    lastCommit,
+		LastCheckTime: fmtTime(lastCheck),
+	}, nil
 }
 
 // GetStatus returns git watcher status.
@@ -210,13 +219,10 @@ func (s *Server) GetStatus(_ context.Context, _ *grpcapi.GetStatusRequest) (*grp
 		return nil, status.Error(codes.Unavailable, "server is not ready: git state not yet initialized")
 	}
 	lastCommit, lastUpdate := s.git.Status()
-	resp := &grpcapi.GetStatusResponse{
-		LastCommit: lastCommit,
-	}
-	if !lastUpdate.IsZero() {
-		resp.LastUpdateTime = lastUpdate.UTC().Format(time.RFC3339)
-	}
-	return resp, nil
+	return &grpcapi.GetStatusResponse{
+		LastCommit:     lastCommit,
+		LastUpdateTime: fmtTime(lastUpdate),
+	}, nil
 }
 
 // TriggerRefresh triggers an immediate git pull.
