@@ -17,6 +17,10 @@ Three kinds of drift are tracked:
 
 ## Contents
 
+- [Getting started](#getting-started)
+  - [Run as a Nomad job](#run-as-a-nomad-job)
+  - [Run the binary directly](#run-the-binary-directly)
+  - [Opt jobs in to monitoring](#opt-jobs-in-to-monitoring)
 - [Design and prior art](#design-and-prior-art)
 - [How it works](#how-it-works)
 - [Job selection](#job-selection)
@@ -45,6 +49,82 @@ Three kinds of drift are tracked:
     - [What the suite covers](#what-the-suite-covers)
     - [Nomad version compatibility](#nomad-version-compatibility)
 - [Development](#development)
+
+---
+
+## Getting started
+
+nomad-botherer needs two things: a git repo containing your Nomad HCL job
+definitions, and a Nomad cluster to compare them against.
+
+### Run as a Nomad job
+
+The most common deployment is to run nomad-botherer as a Nomad job on the
+same cluster it watches. [`examples/nomad-botherer.hcl`](examples/nomad-botherer.hcl)
+is a ready-to-use job definition with every configuration option commented.
+
+1. Copy `examples/nomad-botherer.hcl` into your job repo (or download it).
+
+2. Set the two required values in the `env {}` block:
+   - `GIT_REPO_URL` — the URL of your HCL repo
+   - `GRPC_API_KEY` — a long random string (used to authenticate `nbctl` and `grpcurl`)
+
+3. For a private repo, also set `GIT_TOKEN` (HTTPS) or mount an SSH key and
+   set `GIT_SSH_KEY`. The example file has commented instructions for both,
+   including how to read secrets from a Nomad Variable rather than hardcoding
+   them.
+
+4. If your cluster has ACLs enabled, set `NOMAD_TOKEN` to a token with
+   `list-jobs` and `read-job` capabilities on the target namespace.
+
+5. Submit the job:
+   ```bash
+   nomad job run nomad-botherer.hcl
+   ```
+
+6. Watch startup — nomad-botherer clones the repo and runs its first diff
+   check before reporting healthy:
+   ```bash
+   nomad job status nomad-botherer
+   curl http://<alloc-ip>:8080/healthz
+   ```
+   `/healthz` returns `HTTP 503` with `"status": "starting"` until the first
+   check completes, then `HTTP 200` with a JSON drift summary.
+
+### Run the binary directly
+
+```bash
+./nomad-botherer \
+  --repo-url https://github.com/myorg/nomad-jobs.git \
+  --nomad-addr http://nomad.example.com:4646 \
+  --grpc-api-key your-api-key
+```
+
+For a private HTTPS repo add `--git-token ghp_...`; for SSH add
+`--git-ssh-key ~/.ssh/id_ed25519`. See [Quick start](#quick-start) for
+more examples and [Configuration](#configuration) for the full flag reference.
+
+### Opt jobs in to monitoring
+
+By default, nomad-botherer only watches jobs that declare a `gitops.managed`
+meta key. Add this to any job you want monitored:
+
+```hcl
+job "my-service" {
+  meta = {
+    "gitops.managed" = "true"
+  }
+  # ...
+}
+```
+
+Jobs without this key are silently ignored, even if they are running on the
+cluster. This is intentional — it prevents nomad-botherer from reporting drift
+on manually-managed or third-party jobs that are not in your HCL repo.
+
+To instead watch jobs by name pattern (or watch everything), use
+`--job-selector-glob`. Both criteria are a union: a job matching either is
+watched. See [Job selection](#job-selection) for details.
 
 ---
 
