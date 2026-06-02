@@ -19,7 +19,9 @@
   previous key format will no longer be selected after this change.
 
   The custom prefix configured via `--managed-meta-prefix` / `MANAGED_META_PREFIX`
-  works the same way: a prefix of `myorg` now produces `myorg_managed`.
+  works the same way: a prefix of `myorg` now produces `myorg_managed`. When
+  choosing a custom prefix, keeping `gitops` as a root (e.g. `gitops_myteam`)
+  is recommended so all nomad-botherer keys remain visually grouped.
 
 ## v0.1.2 — 2026-06-02
 

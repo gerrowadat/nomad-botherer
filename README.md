@@ -171,7 +171,9 @@ nomad-botherer does not watch every job in a cluster by default. A job must matc
 
 The two criteria are a **union**: a job is selected if it matches the glob *or* has the `<prefix>_managed` meta key set to `"true"`. With the defaults (no glob, prefix `gitops`), only jobs declaring `gitops_managed = "true"` in their HCL meta stanza are watched.
 
-The prefix is a namespace for all meta keys nomad-botherer reads or writes. Using `gitops` means the opt-in key is `gitops_managed`, and future attributes will follow the same `gitops_<attribute>` pattern. Use a different prefix if another team or tool already owns `gitops_*` keys on your cluster.
+The prefix is a namespace for all meta keys nomad-botherer reads or writes. Using `gitops` means the opt-in key is `gitops_managed`, and future attributes will follow the same `gitops_<attribute>` pattern.
+
+If you need to change the prefix — for example because another team already owns `gitops_*` on the cluster — keep `gitops` as a root and append your qualifier: `gitops_myteam`, `gitops_platform`, etc. This keeps all nomad-botherer keys visually grouped across teams and avoids conflicts with unrelated meta keys.
 
 **Opting a job in via meta tag (default method):**
 
@@ -199,9 +201,11 @@ job "my-service" {
 **Changing the meta prefix** (useful when sharing a cluster with multiple teams or tools):
 
 ```bash
-./nomad-botherer --managed-meta-prefix='myorg' ...
-# opts in jobs with meta { myorg_managed = "true" }
+./nomad-botherer --managed-meta-prefix='gitops_myteam' ...
+# opts in jobs with meta { gitops_myteam_managed = "true" }
 ```
+
+Keeping `gitops` as the root of a custom prefix makes all nomad-botherer keys easy to identify across a shared cluster.
 
 **Disabling meta-based selection entirely** (glob only):
 

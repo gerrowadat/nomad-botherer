@@ -408,6 +408,8 @@ alternative is an implementation of that interface; the update queue does not
 need to know which backend is active. The opt-in flag is orthogonal to this
 interface and should be a config-level default (`--gitops-opt-in-key`, default:
 `gitops_managed`) so teams can rename it if they have a key naming convention.
+When customising the prefix, keeping `gitops` as a root (e.g. `gitops_myteam`)
+is recommended so all nomad-botherer keys remain visually grouped across teams.
 
 ---
 
