@@ -50,14 +50,14 @@ test:
 	go test -race -timeout 60s ./...
 
 ## test-regression: run the regression suite against a real Nomad cluster (via Docker).
-## Requires Docker. Set NOMAD_VERSION to target a specific version (default: 1.9.3).
+## Requires Docker. Set NOMAD_VERSION to target a specific version (default: 1.9.6).
 ## Set NOMAD_ADDR to use an existing cluster instead of starting one via Docker.
-## Example: make test-regression NOMAD_VERSION=1.10.2
+## Example: make test-regression NOMAD_VERSION=1.11.3
 test-regression:
 	go test -tags=regression -timeout 15m -v -count=1 ./tests/regression/...
 
 ## test-regression-versions: run the regression suite against each NOMAD_VERSIONS entry.
-## Example: make test-regression-versions NOMAD_VERSIONS="1.9.3 1.10.2"
+## Example: make test-regression-versions NOMAD_VERSIONS="1.9.6 1.10.5 1.11.3 2.0.2"
 test-regression-versions:
 	@for ver in $(NOMAD_VERSIONS); do \
 		echo "=== Testing against Nomad $$ver ==="; \

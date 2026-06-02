@@ -785,13 +785,13 @@ minutes.
 #### Targeting a specific Nomad version
 
 ```bash
-NOMAD_VERSION=1.10.2 make test-regression
+NOMAD_VERSION=1.11.3 make test-regression
 ```
 
 Or directly:
 
 ```bash
-NOMAD_VERSION=1.10.2 go test -tags=regression -timeout 15m -v -count=1 ./tests/regression/...
+NOMAD_VERSION=1.11.3 go test -tags=regression -timeout 15m -v -count=1 ./tests/regression/...
 ```
 
 `NOMAD_VERSION` must match a tag on the official
@@ -800,7 +800,7 @@ NOMAD_VERSION=1.10.2 go test -tags=regression -timeout 15m -v -count=1 ./tests/r
 #### Testing against multiple versions
 
 ```bash
-make test-regression-versions NOMAD_VERSIONS="1.8.7 1.9.3 1.10.2"
+make test-regression-versions NOMAD_VERSIONS="1.9.6 1.10.5 1.11.3 2.0.2"
 ```
 
 This iterates over the list and runs the full suite against each version in

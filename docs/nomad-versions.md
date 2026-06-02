@@ -20,9 +20,9 @@ After a successful run, add a row to the table below and update `tests/regressio
 
 ## Compatibility matrix
 
-| nomad-botherer | Nomad 1.8.x | Nomad 1.9.x | Nomad 1.10.x | Notes |
-|----------------|:-----------:|:-----------:|:------------:|-------|
-| (unreleased)   |             |             |              | Matrix will be filled as releases are cut |
+| nomad-botherer | Nomad 1.9.x | Nomad 1.10.x | Nomad 1.11.x | Nomad 2.0.x | Notes |
+|----------------|:-----------:|:------------:|:------------:|:-----------:|-------|
+| v0.1.2         | ✅ 1.9.6    | ✅ 1.10.5    | ✅ 1.11.3    | ✅ 2.0.2    |       |
 
 ### Column key
 

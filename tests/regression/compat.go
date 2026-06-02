@@ -26,7 +26,7 @@ package regression
 import "time"
 
 // defaultNomadVersion is used when NOMAD_VERSION is unset and Docker is available.
-const defaultNomadVersion = "1.9.3"
+const defaultNomadVersion = "1.9.6"
 
 // VersionRecord documents the result of running the regression suite against
 // a specific Nomad version. Records are added manually after each release.
@@ -50,5 +50,28 @@ type VersionRecord struct {
 //  2. Add a VersionRecord entry below.
 //  3. Update docs/nomad-versions.md.
 var TestedVersions = []VersionRecord{
-	// Entries will be added here as releases are tested.
+	{
+		NomadVersion:    "2.0.2",
+		BothererRelease: "v0.1.2",
+		TestedAt:        time.Date(2026, 6, 2, 0, 0, 0, 0, time.UTC),
+		Passed:          true,
+	},
+	{
+		NomadVersion:    "1.11.3",
+		BothererRelease: "v0.1.2",
+		TestedAt:        time.Date(2026, 6, 2, 0, 0, 0, 0, time.UTC),
+		Passed:          true,
+	},
+	{
+		NomadVersion:    "1.10.5",
+		BothererRelease: "v0.1.2",
+		TestedAt:        time.Date(2026, 6, 2, 0, 0, 0, 0, time.UTC),
+		Passed:          true,
+	},
+	{
+		NomadVersion:    "1.9.6",
+		BothererRelease: "v0.1.2",
+		TestedAt:        time.Date(2026, 6, 2, 0, 0, 0, 0, time.UTC),
+		Passed:          true,
+	},
 }
