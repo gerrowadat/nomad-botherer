@@ -19,9 +19,9 @@ job "nomad-botherer" {
 
   # Opt this job in to its own monitoring so nomad-botherer watches itself
   # for drift. The meta key name is controlled by MANAGED_META_PREFIX below;
-  # with the default prefix of "gitops" the key is "gitops.managed".
-  meta = {
-    "gitops.managed" = "true"
+  # with the default prefix of "gitops" the key is "gitops_managed".
+  meta {
+    gitops_managed = "true"
   }
 
   group "botherer" {
@@ -144,10 +144,11 @@ job "nomad-botherer" {
         # A job must match at least one of the two criteria below.
         #
         # Meta key (on by default): any job with
-        #   meta = { "gitops.managed" = "true" }
+        #   meta { gitops_managed = "true" }
         # in its HCL definition is automatically watched. The prefix before
-        # ".managed" is controlled by MANAGED_META_PREFIX; change it if
-        # another tool already owns "gitops.*" on your cluster.
+        # "_managed" is controlled by MANAGED_META_PREFIX. If you need to
+        # change it, keep "gitops" as a root (e.g. "gitops_myteam") so all
+        # nomad-botherer keys remain visually grouped on a shared cluster.
         MANAGED_META_PREFIX = "gitops"
 
         # Glob: watch all jobs whose name matches a shell glob pattern.
