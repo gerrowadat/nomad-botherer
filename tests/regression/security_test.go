@@ -194,7 +194,7 @@ func TestSecurity_Webhook_HTMLEscaping(t *testing.T) {
 		WebhookPath:       "/webhook",
 		ManagedMetaPrefix: "gitops",
 	}
-	srv := server.NewWithRegistry(cfg, diffSrc, gitSrc, "test", prometheus.NewRegistry())
+	srv := server.NewWithRegistry(cfg, diffSrc, gitSrc, server.BuildInfo{Version: "test"}, prometheus.NewRegistry())
 
 	req := httptest.NewRequest("GET", "/", nil)
 	w := httptest.NewRecorder()
