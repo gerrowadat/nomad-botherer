@@ -528,7 +528,8 @@ func gatherJobDriftSince(t *testing.T, reg prometheus.Gatherer, job, diffType st
 
 // TestDiffer_SkipOnUnchangedIndexAndCommit verifies that Check skips all
 // per-job API calls when both the Nomad Raft index and the git commit are
-// identical to the previous check.
+// identical to the previous check, and still updates the last-check timestamp
+// so the NomadBothererCheckStale alert does not fire on quiet but healthy cycles.
 func TestDiffer_SkipOnUnchangedIndexAndCommit(t *testing.T) {
 	mock := defaultMock()
 	infoCalls := 0
@@ -539,7 +540,8 @@ func TestDiffer_SkipOnUnchangedIndexAndCommit(t *testing.T) {
 	mock.listFn = func(q *nomadapi.QueryOptions) ([]*nomadapi.JobListStub, *nomadapi.QueryMeta, error) {
 		return nil, &nomadapi.QueryMeta{LastIndex: 42}, nil
 	}
-	d := newTestDiffer(mock)
+	reg := prometheus.NewRegistry()
+	d := newTestDifferWithRegistry(mock, reg)
 
 	if err := d.Check(map[string]string{"a.hcl": `job "test-job" {}`}, "abc123"); err != nil {
 		t.Fatal(err)
@@ -554,6 +556,24 @@ func TestDiffer_SkipOnUnchangedIndexAndCommit(t *testing.T) {
 	}
 	if infoCalls != 1 {
 		t.Errorf("expected Info not called on skip, got %d total calls", infoCalls)
+	}
+
+	// The last-check timestamp must be updated even on a skip so that the
+	// NomadBothererCheckStale alert does not fire on quiet but healthy cycles.
+	mfs, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+	var lastCheckTs float64
+	for _, mf := range mfs {
+		if mf.GetName() == "nomad_botherer_last_check_timestamp_seconds" {
+			for _, m := range mf.GetMetric() {
+				lastCheckTs = m.GetGauge().GetValue()
+			}
+		}
+	}
+	if lastCheckTs == 0 {
+		t.Error("expected nomad_botherer_last_check_timestamp_seconds to be set after a skip cycle")
 	}
 }
 
