@@ -25,8 +25,8 @@ not. A fresh diff cycle will detect the remaining drift and queue new updates,
 but whether those new updates correspond to the same intent as the interrupted
 rollout is ambiguous.
 
-This proposal describes three ways to checkpoint update state without a
-standalone database.
+This proposal describes how to checkpoint update state without a standalone
+database, and records one considered-and-rejected alternative.
 
 ---
 
@@ -48,14 +48,11 @@ standalone database.
   comes from CAS and re-planning, and deregister safety comes from
   rechecking live state immediately before the call, not from remembered
   intent. See "Restart safety and recovery" in
-  [gitops-job-updates.md](gitops-job-updates.md).
-
-One known exception sits outside this rule by nature: Diun image-update
-notifications are delivered once and are not recomputable from Git or Nomad,
-so losing them loses real information (until the next upstream event). They
-use the same Nomad Variables store, and their loss still degrades only
-visibility, not GitOps correctness. See
-[diun-integration.md](diun-integration.md).
+  [gitops-job-updates.md](gitops-job-updates.md). This rule is
+  exception-free: anything that would require nomad-botherer to hold
+  non-recomputable state belongs outside the tool (the
+  [Diun integration proposal](diun-integration.md) keeps once-only
+  notification delivery outside the boundary for exactly this reason).
 
 ---
 
@@ -72,11 +69,6 @@ nomad-botherer writes one Variable per in-flight rollout at a well-known path:
 ```
 nomad/jobs/gitops/checkpoints/<git_commit>
 ```
-
-(The [Diun integration proposal](diun-integration.md) stores received
-image-update notifications under a sibling prefix,
-`nomad/jobs/gitops/image-updates/`, so a single ACL policy on
-`nomad/jobs/gitops/*` covers all nomad-botherer operational state.)
 
 The value is a JSON-serialised snapshot of the `JobUpdate`
 slice for that commit. The Variable is created when the first update for a
@@ -144,82 +136,23 @@ operational state inside the system being managed.
 
 ---
 
-## Alternative 2: Git branch as the checkpoint store
+## Alternative 2 (rejected): Git branch as the checkpoint store
 
-**How it works**
+Earlier drafts described a second option in detail: a dedicated
+`gitops-state` branch in the watched repository, holding one JSON checkpoint
+file per rollout, committed and pushed on every status transition, with push
+rejection as the concurrency control. Its attraction was the audit trail —
+every state transition an immutable commit, inspectable with stock Git
+tooling.
 
-nomad-botherer maintains a dedicated branch in the same repository it watches,
-e.g., `gitops-state`, which it treats as a write-only append log. The branch
-holds one file per active rollout:
-
-```
-checkpoints/<git_commit>.json
-```
-
-Each file contains the `JobUpdate` slice for that commit, serialised as JSON.
-The file is committed and pushed when updates are enqueued, and updated with
-terminal statuses when each update completes. The branch is never merged into
-the main branch; it is purely operational state.
-
-On startup, nomad-botherer shallow-fetches the `gitops-state` branch (a small
-fetch since it only contains checkpoint files, not job HCL), reads all
-non-terminal checkpoint files, and rehydrates the queue.
-
-**Concurrency control**
-
-Git itself provides concurrency control via push rejection. If two instances try
-to push a checkpoint update simultaneously, one will receive a non-fast-forward
-rejection and must pull, merge, and retry. For checkpoint files (one file per
-commit, independent between commits), merge conflicts are essentially impossible;
-the only conflict would be two instances updating the same file, which is
-prevented by the single-writer design (only the instance that detected the
-commit owns its checkpoint).
-
-**Implementation sketch**
-
-The existing `gitwatch.Watcher` uses `go-git` and `memory.NewStorage()`. The
-checkpoint writer needs a separate, persistable storage (not in-memory) so that
-pushes can be made. This likely means a second `go-git` clone with disk-backed
-storage, or a thin wrapper around `git` CLI calls for the state branch.
-
-```go
-type GitCheckpointStore struct {
-    repoURL    string
-    branch     string  // "gitops-state"
-    workDir    string  // disk path for the state clone
-    auth       transport.AuthMethod
-}
-```
-
-**Pros**
-
-- Git is already a dependency; no new credentials or network endpoints needed
-  (assuming write access to the repo is already granted via token or SSH key).
-- The checkpoint history is a full Git log: every state transition is an
-  immutable commit, with timestamp and message. This is a better audit trail
-  than the in-memory or Nomad Variables approaches.
-- Standard Git tooling (`git log`, `git diff`, `git show`) lets operators
-  inspect and manipulate checkpoint state without custom tooling.
-- No external API version constraints (works with any Git host).
-
-**Cons**
-
-- Requires write access to the repository. Read-only tokens (common for
-  pull-based GitOps setups) are not sufficient.
-- Adds Git push latency to the hot path of every status update. A rollout of
-  30 jobs produces 30+ commits to the state branch.
-- Branch history grows unboundedly unless a periodic cleanup job prunes old
-  checkpoint commits (e.g., `git push --force` with a truncated history, or
-  a separate cleanup cron).
-- Mixing operational state and source code in one repository is operationally
-  awkward. Teams that have separate read/write access policies for source vs
-  operational state cannot use this without repo restructuring.
-- The state branch must be protected from human pushes that could corrupt
-  checkpoint data; this requires branch protection rules on the Git host.
-
-**Verdict**: good for teams that already have write access and want a full audit
-trail, but the per-update commit overhead and the read-write access requirement
-make it awkward as a default.
+It is rejected on principle: **nomad-botherer never writes to Git.** The
+tool reads Git and reads/writes Nomad; repo changes of any kind arrive by PR
+from humans or external automation, and the tool holds no Git write
+credentials. Beyond the principle, the practical costs were real too — a
+write-capable token where pull-based GitOps otherwise needs read-only, push
+latency on every status update, unbounded state-branch history, and a
+disk-backed second clone alongside the in-memory one. The full write-up is
+in this file's Git history if the reasoning ever needs revisiting.
 
 ---
 
@@ -390,23 +323,23 @@ selector; it is not a checkpoint mechanism.
 
 ## Comparison
 
-The three alternatives address the same problem (where to persist checkpoint
-state) but sit on different infrastructure axes. Alternative 3 is also an answer
-to a slightly different question (which jobs should be managed at all), so it
-layers on top of either of the other two rather than replacing them.
+The two live alternatives answer different questions — Alternative 1 is
+where to persist checkpoint state, Alternative 3 is which jobs should be
+managed at all — so Alternative 3 layers on top of Alternative 1 rather
+than replacing it.
 
-| Property | Alt 1: Nomad Variables | Alt 2: Git state branch | Alt 3: meta opt-in |
-|---|---|---|---|
-| What it stores | Pending/completed updates | Pending/completed updates | Scope selector only |
-| Infrastructure | Nomad 1.4+ | Git write access | Any Nomad |
-| Durability | Raft-backed | Full Git history | N/A (opt-in flag, not state) |
-| Audit trail | Moderate | Best | N/A |
-| Startup cost | List Variables + rehydrate | Clone state branch + read files | Already paid by diff cycle |
-| Concurrent instances | CAS on Variable ModifyIndex | Push rejection + retry | N/A |
-| Diff loop risk | None | None | None (flag is in HCL, not written by tool) |
-| Deregister tracking | Variable deleted on success | Checkpoint file removed | No record |
-| Nomad version required | 1.4+ | Any | Any |
-| Prevents touching manual jobs | No | No | Yes |
+| Property | Alt 1: Nomad Variables | Alt 3: meta opt-in |
+|---|---|---|
+| What it stores | Pending/completed updates | Scope selector only |
+| Infrastructure | Nomad 1.4+ | Any Nomad |
+| Durability | Raft-backed | N/A (opt-in flag, not state) |
+| Audit trail | Moderate | N/A |
+| Startup cost | List Variables + rehydrate | Already paid by diff cycle |
+| Concurrent instances | CAS on Variable ModifyIndex | N/A |
+| Diff loop risk | None | None (flag is in HCL, not written by tool) |
+| Deregister tracking | Variable deleted on success | No record |
+| Nomad version required | 1.4+ | Any |
+| Prevents touching manual jobs | No | Yes |
 
 ---
 
@@ -423,12 +356,11 @@ Implement the hybrid of Alternative 3 + Alternative 1:
    config flag (`--checkpoint-store`, default: `nomad-variables`). This provides
    durable, CAS-protected restart state without an external database.
 
-3. Offer Alternative 2 (Git state branch) as `--checkpoint-store=git-branch` for
-   teams that need a full audit trail and already have repo write access.
-
-The `CheckpointStore` interface above is the right abstraction boundary. Each
-alternative is an implementation of that interface; the update queue does not
-need to know which backend is active. The opt-in flag is orthogonal to this
+The `CheckpointStore` interface above is still the right abstraction
+boundary: the update queue does not need to know which backend is active,
+and a future backend (or a no-op store for memory-only operation) slots in
+without restructuring. Any such backend must respect the never-write-to-Git
+rule. The opt-in flag is orthogonal to this
 interface and should be a config-level default (`--gitops-opt-in-key`, default:
 `gitops_managed`) so teams can rename it if they have a key naming convention.
 When customising the prefix, keeping `gitops` as a root (e.g. `gitops_myteam`)

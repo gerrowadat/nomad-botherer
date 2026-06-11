@@ -81,6 +81,14 @@ without volume claims. The checkpointing proposal recommends Nomad Variables
 `CheckpointStore` interface so the backend is swappable. Do not introduce
 SQLite, PostgreSQL, Redis, or any other external store.
 
+**Never write to Git.** nomad-botherer reads Git and reads/writes Nomad —
+nothing else. No commits, no pushes, no GitHub API writes, no state branch;
+the tool holds no Git write credentials. Repo changes (including image tag
+bumps surfaced by external tooling like Diun) arrive by PR from humans or
+from automation that is not this tool. The most nomad-botherer offers is a
+read-only diff (the image-patch endpoint in the Diun proposal) for someone
+else to turn into a PR.
+
 **Decoupled detection and application.** The diff check loop and the apply loop
 are separate. A slow or failing apply must not delay the next diff check. The
 async queue model (Alternative B in the job updates proposal) is the right
@@ -102,9 +110,8 @@ The detection side has optimisations that are easy to accidentally break:
   prior cycle, per-job plan calls are skipped entirely. Keep this optimisation
   when extending `Check()`.
 - **In-memory clone**: `gitwatch.Watcher` uses `memory.NewStorage()` —
-  no disk writes, no persistent files. Any new git interaction should stay
-  in-memory or go through a clearly separate path (e.g. a checkpoint writer on
-  a state branch).
+  no disk writes, no persistent files. Any new git interaction stays
+  in-memory and read-only (see "Never write to Git" above).
 - **Webhook coalescing**: `Watcher.triggerCh` is a buffered channel of size 1.
   Multiple rapid triggers collapse to one fetch. Don't change this to unbuffered.
 

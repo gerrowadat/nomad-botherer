@@ -172,9 +172,10 @@ of that change may be applied to Nomad automatically.
 The [Diun integration proposal](diun-integration.md) governs the *upstream*
 direction: a newer image exists in a registry, but Git still pins the old
 tag. That is not drift — Git and Nomad agree — so no policy value causes it
-to be applied. It is surfaced as an available update, and a human (or
-external automation) updates Git, at which point the change flows back
-through this proposal's policy gate like any other commit.
+to be applied, and nomad-botherer does not even consume the notification:
+Diun notifies whoever closes that loop (a human, or a separate bumper job),
+Git gets updated by PR, and the change then flows back through this
+proposal's policy gate like any other commit.
 
 The two are deliberately orthogonal: `gitops_update_policy` never causes a
 write that is not in Git, and Diun tracking never causes a write at all.

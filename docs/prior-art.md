@@ -114,8 +114,11 @@ tag regexes, semver sorting, and notify-on-new vs notify-on-update. It
 deliberately *only notifies*: it never writes to a cluster or a repo, has no
 query API (push-only, each event delivered once), and keeps its own seen-state
 in an embedded store. This makes it composable with a GitOps operator rather
-than competing with one, and it is the planned integration for
-nomad-botherer's update-availability surface.
+than competing with one. The planned setup points Diun's Nomad provider at
+the cluster, watching all jobs; nomad-botherer and Diun do not talk to each
+other at all. nomad-botherer's only contribution is a read-only patch
+endpoint for whoever acts on the notifications — consuming them and writing
+the bump to Git stays outside the tool.
 
 ### Renovate (renovatebot/renovate)
 
@@ -143,8 +146,8 @@ A Kubernetes operator that updates workloads *in-cluster* when new images
 appear, with optional approval workflows. The cluster drifts ahead of Git
 by design; Git stops being the source of truth. This is precisely the
 failure mode nomad-botherer avoids by never applying anything that is not
-in Git: image updates are surfaced and a diff is offered, but the change
-must land in the repo before it lands in Nomad.
+in Git: Diun notices the update, nomad-botherer offers a ready-made diff,
+but the change must land in the repo before it lands in Nomad.
 
 ---
 
@@ -201,10 +204,11 @@ touched, even if it is running in Nomad without a corresponding HCL file. This
 prevents accidental deregistration of manually-managed jobs.
 
 **No external database for state.** nomad-ops requires SQLite on persistent
-storage. The design proposals describe three alternatives that avoid this: Nomad
-Variables (Raft-backed KV built into Nomad 1.4+), a dedicated Git state branch,
-or deriving restart state from per-job metadata. The goal is that nomad-botherer
-can be rescheduled to any node without volume claims.
+storage. The design proposals use Nomad Variables (Raft-backed KV built into
+Nomad 1.4+) for checkpoint state instead, paired with a meta opt-in scope
+selector; a dedicated Git state branch was considered and rejected, because
+nomad-botherer never writes to Git. The goal is that nomad-botherer can be
+rescheduled to any node without volume claims.
 
 **Async apply queue, not synchronous blocking.** An in-process queue decouples
 detection from application. A slow or failing apply does not delay the next diff
