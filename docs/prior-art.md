@@ -114,8 +114,10 @@ tag regexes, semver sorting, and notify-on-new vs notify-on-update. It
 deliberately *only notifies*: it never writes to a cluster or a repo, has no
 query API (push-only, each event delivered once), and keeps its own seen-state
 in an embedded store. This makes it composable with a GitOps operator rather
-than competing with one, and it is the planned integration for
-nomad-botherer's update-availability surface.
+than competing with one. nomad-botherer's planned integration is one-way:
+generate Diun's watch list from the managed jobs in Git, and offer a patch
+endpoint for whoever acts on the notifications — consuming them and writing
+the bump to Git stays outside the tool.
 
 ### Renovate (renovatebot/renovate)
 
@@ -143,8 +145,8 @@ A Kubernetes operator that updates workloads *in-cluster* when new images
 appear, with optional approval workflows. The cluster drifts ahead of Git
 by design; Git stops being the source of truth. This is precisely the
 failure mode nomad-botherer avoids by never applying anything that is not
-in Git: image updates are surfaced and a diff is offered, but the change
-must land in the repo before it lands in Nomad.
+in Git: Diun notices the update, nomad-botherer offers a ready-made diff,
+but the change must land in the repo before it lands in Nomad.
 
 ---
 

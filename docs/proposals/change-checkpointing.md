@@ -48,14 +48,11 @@ standalone database.
   comes from CAS and re-planning, and deregister safety comes from
   rechecking live state immediately before the call, not from remembered
   intent. See "Restart safety and recovery" in
-  [gitops-job-updates.md](gitops-job-updates.md).
-
-One known exception sits outside this rule by nature: Diun image-update
-notifications are delivered once and are not recomputable from Git or Nomad,
-so losing them loses real information (until the next upstream event). They
-use the same Nomad Variables store, and their loss still degrades only
-visibility, not GitOps correctness. See
-[diun-integration.md](diun-integration.md).
+  [gitops-job-updates.md](gitops-job-updates.md). This rule is
+  exception-free: anything that would require nomad-botherer to hold
+  non-recomputable state belongs outside the tool (the
+  [Diun integration proposal](diun-integration.md) keeps once-only
+  notification delivery outside the boundary for exactly this reason).
 
 ---
 
@@ -72,11 +69,6 @@ nomad-botherer writes one Variable per in-flight rollout at a well-known path:
 ```
 nomad/jobs/gitops/checkpoints/<git_commit>
 ```
-
-(The [Diun integration proposal](diun-integration.md) stores received
-image-update notifications under a sibling prefix,
-`nomad/jobs/gitops/image-updates/`, so a single ACL policy on
-`nomad/jobs/gitops/*` covers all nomad-botherer operational state.)
 
 The value is a JSON-serialised snapshot of the `JobUpdate`
 slice for that commit. The Variable is created when the first update for a
