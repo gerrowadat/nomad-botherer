@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased
+
+### Security
+
+- **Dependency updates for known vulnerabilities.** Go toolchain 1.25.6 →
+  1.25.11 and `golang.org/x/crypto` v0.50.0 → v0.52.0. `govulncheck` reported
+  21 vulnerabilities reachable from this codebase at the old versions
+  (stdlib `net/http`, `crypto/tls`, `crypto/x509`, `html/template`, and the
+  x/crypto SSH code used for git auth); it reports none after the upgrade.
+- **Webhook request bodies are capped at 25 MB** (GitHub's own payload limit).
+  Previously the body was read into memory without limit, allowing memory
+  exhaustion via a single large request.
+- **`--git-token` is now refused with a plain `http://` repo URL**, which
+  would send the token in cleartext. Use `https://` or SSH.
+- **API key comparison no longer leaks the key length.** Both sides of the
+  bearer-token check are SHA-256 hashed before the constant-time compare.
+- **Hardening headers on all HTTP responses**: `X-Content-Type-Options:
+  nosniff`, `X-Frame-Options: DENY`, a restrictive `Content-Security-Policy`,
+  and `Referrer-Policy: no-referrer`.
+
 ## v0.4.0 — 2026-06-02
 
 ### Breaking changes

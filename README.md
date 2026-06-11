@@ -291,7 +291,7 @@ Every flag has a corresponding environment variable. Environment variables are r
 | `--branch` | `GIT_BRANCH` | `main` | Branch to watch |
 | `--poll-interval` | `POLL_INTERVAL` | `5m` | How often to poll git for changes |
 | `--hcl-dir` | `HCL_DIR` | *(repo root)* | Subdirectory containing HCL job files |
-| `--git-token` | `GIT_TOKEN` | | HTTP token for private repos (GitHub PAT etc.) |
+| `--git-token` | `GIT_TOKEN` | | HTTP token for private repos (GitHub PAT etc.). Requires an `https://` repo URL; refused for plain `http://` URLs, which would send the token in cleartext. |
 | `--git-ssh-key` | `GIT_SSH_KEY` | | Path to SSH private key |
 | `--git-ssh-key-password` | `GIT_SSH_KEY_PASSWORD` | | SSH key passphrase |
 | `--git-ssh-known-hosts` | `GIT_SSH_KNOWN_HOSTS` | `~/.ssh/known_hosts` | Path to known_hosts file for SSH host key verification; required when using SSH auth. Defaults to the system known_hosts locations. Omit to allow the default search, or set explicitly to a specific file. |
@@ -331,6 +331,8 @@ Configuring a webhook removes the latency between a push to the repo and the nex
 The service handles `push` events (triggers a fetch + diff) and `ping` events (acknowledged, no action). All other event types are silently ignored with a `200 OK`.
 
 If `--webhook-secret` is empty, signature verification is skipped. In production, always set a secret.
+
+Webhook request bodies are capped at 25 MB (GitHub's own payload limit); larger requests are rejected with `400 Bad Request` before being read into memory.
 
 ---
 

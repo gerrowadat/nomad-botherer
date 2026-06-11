@@ -494,3 +494,38 @@ func TestLoadFromArgs_ManagedMetaHCLCanonicalEnv(t *testing.T) {
 		t.Error("ManagedMetaHCLCanonical: want true from env var, got false")
 	}
 }
+
+func TestLoadFromArgs_GitTokenWithPlainHTTPRejected(t *testing.T) {
+	os.Unsetenv("GIT_REPO_URL")
+	os.Unsetenv("GIT_TOKEN")
+	for _, url := range []string{"http://example.com/repo.git", "HTTP://example.com/repo.git"} {
+		_, err := LoadFromArgs(newFS(), []string{"--repo-url", url, "--git-token", "secret-token"})
+		if err == nil {
+			t.Errorf("repo URL %q with git token: want error (cleartext token), got nil", url)
+		}
+	}
+}
+
+func TestLoadFromArgs_GitTokenWithHTTPSAccepted(t *testing.T) {
+	os.Unsetenv("GIT_REPO_URL")
+	os.Unsetenv("GIT_TOKEN")
+	cfg, err := LoadFromArgs(newFS(), []string{"--repo-url", "https://example.com/repo.git", "--git-token", "secret-token"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.GitToken != "secret-token" {
+		t.Errorf("unexpected GitToken: %q", cfg.GitToken)
+	}
+}
+
+func TestLoadFromArgs_PlainHTTPWithoutTokenAccepted(t *testing.T) {
+	os.Unsetenv("GIT_REPO_URL")
+	os.Unsetenv("GIT_TOKEN")
+	cfg, err := LoadFromArgs(newFS(), []string{"--repo-url", "http://example.com/repo.git"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.RepoURL != "http://example.com/repo.git" {
+		t.Errorf("unexpected RepoURL: %q", cfg.RepoURL)
+	}
+}

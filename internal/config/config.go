@@ -93,6 +93,11 @@ func LoadFromArgs(fs *flag.FlagSet, args []string) (*Config, error) {
 		return nil, fmt.Errorf("--repo-url / GIT_REPO_URL is required")
 	}
 
+	// A git token over plain HTTP is sent in cleartext to the remote.
+	if c.GitToken != "" && strings.HasPrefix(strings.ToLower(c.RepoURL), "http://") {
+		return nil, fmt.Errorf("--git-token / GIT_TOKEN cannot be used with a plain http:// repo URL: the token would be sent in cleartext; use https:// or SSH instead")
+	}
+
 	return c, nil
 }
 
