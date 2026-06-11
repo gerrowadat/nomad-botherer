@@ -322,7 +322,7 @@ func (s *Server) handleDiffs(w http.ResponseWriter, r *http.Request) {
 	}
 	diffs, lastCheck, commit := s.diffs.Diffs()
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	fmt.Fprint(w, renderDiffsText(diffs, lastCheck, commit))
+	fmt.Fprint(w, renderDiffsText(diffs, lastCheck, commit, s.cfg.RedactSecrets))
 }
 
 // HealthResponse is the JSON body returned by /healthz.

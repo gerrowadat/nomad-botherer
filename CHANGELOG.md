@@ -19,6 +19,14 @@
 - **Hardening headers on all HTTP responses**: `X-Content-Type-Options:
   nosniff`, `X-Frame-Options: DENY`, a restrictive `Content-Security-Policy`,
   and `Referrer-Policy: no-referrer`.
+- **Plan diffs redact potentially sensitive values by default.** Env vars,
+  template bodies, and fields with secret-like names (`password`, `token`,
+  `secret`, ...) are replaced with `[REDACTED]` and annotated
+  `(value redacted)` before the diff is stored, so `/diffs` never shows them.
+  The diff structure and field names are preserved, and the `/diffs` output
+  carries a banner saying redaction is active. Controlled by
+  `--redact-secrets` / `REDACT_SECRETS` (default `true`); redactions are
+  counted in `nomad_botherer_diff_fields_redacted_total`.
 
 ## v0.4.0 — 2026-06-02
 

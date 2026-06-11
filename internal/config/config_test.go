@@ -529,3 +529,37 @@ func TestLoadFromArgs_PlainHTTPWithoutTokenAccepted(t *testing.T) {
 		t.Errorf("unexpected RepoURL: %q", cfg.RepoURL)
 	}
 }
+
+func TestLoadFromArgs_RedactSecretsDefault(t *testing.T) {
+	os.Unsetenv("REDACT_SECRETS")
+	cfg, err := LoadFromArgs(newFS(), []string{"--repo-url", "https://example.com/r.git"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !cfg.RedactSecrets {
+		t.Error("RedactSecrets: want true by default, got false")
+	}
+}
+
+func TestLoadFromArgs_RedactSecretsFlagOff(t *testing.T) {
+	os.Unsetenv("REDACT_SECRETS")
+	cfg, err := LoadFromArgs(newFS(), []string{"--repo-url", "https://example.com/r.git", "--redact-secrets=false"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.RedactSecrets {
+		t.Error("RedactSecrets: want false after --redact-secrets=false, got true")
+	}
+}
+
+func TestLoadFromArgs_RedactSecretsEnvOff(t *testing.T) {
+	os.Setenv("REDACT_SECRETS", "false")
+	t.Cleanup(func() { os.Unsetenv("REDACT_SECRETS") })
+	cfg, err := LoadFromArgs(newFS(), []string{"--repo-url", "https://example.com/r.git"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.RedactSecrets {
+		t.Error("RedactSecrets: want false from env var, got true")
+	}
+}
