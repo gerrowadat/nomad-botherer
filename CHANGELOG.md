@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.4.0 — 2026-06-11
 
 ### Security
 
@@ -27,8 +27,6 @@
   carries a banner saying redaction is active. Controlled by
   `--redact-secrets` / `REDACT_SECRETS` (default `true`); redactions are
   counted in `nomad_botherer_diff_fields_redacted_total`.
-
-## v0.4.0 — 2026-06-02
 
 ### Breaking changes
 
