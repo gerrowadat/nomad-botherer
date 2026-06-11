@@ -230,3 +230,63 @@ func TestDiffs_Modified_WithTaskAnnotations(t *testing.T) {
 		t.Error("task annotation should appear in output")
 	}
 }
+
+// ── secret redaction ──────────────────────────────────────────────────────────
+
+// redactedEnvDiff is a JobDiff as the differ stores it when redaction is on:
+// values already replaced and the field annotated.
+func redactedEnvDiff() []nomad.JobDiff {
+	return []nomad.JobDiff{
+		{
+			JobID:    "myapp",
+			HCLFile:  "myapp.hcl",
+			DiffType: nomad.DiffTypeModified,
+			PlanDiff: &nomadapi.JobDiff{
+				Type: "Edited",
+				ID:   "myapp",
+				Fields: []*nomadapi.FieldDiff{
+					{Type: "Edited", Name: "Env[API_TOKEN]", Old: nomad.RedactedValue, New: nomad.RedactedValue, Annotations: []string{"value redacted"}},
+				},
+			},
+		},
+	}
+}
+
+func diffsResponseWithRedaction(t *testing.T, diffs []nomad.JobDiff, redact bool) string {
+	t.Helper()
+	cfg := &config.Config{ListenAddr: ":0", WebhookPath: "/webhook", Branch: "main", RedactSecrets: redact}
+	diffSrc := &mockDiffSource{diffs: diffs, lastCheck: time.Now(), lastCommit: "abc"}
+	gitSrc := &mockGitSource{lastUpdate: time.Now()}
+	srv := server.NewWithRegistry(cfg, diffSrc, gitSrc, server.BuildInfo{Version: "test"}, prometheus.NewRegistry())
+	req := httptest.NewRequest(http.MethodGet, "/diffs", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	return rec.Body.String()
+}
+
+func TestDiffs_RedactionBannerAndMarkers(t *testing.T) {
+	body := diffsResponseWithRedaction(t, redactedEnvDiff(), true)
+	if !strings.Contains(body, "shown as [REDACTED]") {
+		t.Errorf("redaction banner missing from /diffs output:\n%s", body)
+	}
+	if !strings.Contains(body, `~ Env[API_TOKEN]: "[REDACTED]" => "[REDACTED]" (value redacted)`) {
+		t.Errorf("redacted field should keep diff appearance with markers and annotation:\n%s", body)
+	}
+}
+
+func TestDiffs_RedactionDisabled_NoBanner(t *testing.T) {
+	body := diffsResponseWithRedaction(t, redactedEnvDiff(), false)
+	if strings.Contains(body, "shown as [REDACTED]") {
+		t.Errorf("banner should be absent when redaction is disabled:\n%s", body)
+	}
+}
+
+func TestDiffs_RedactionEnabled_NoDiffs_NoBanner(t *testing.T) {
+	body := diffsResponseWithRedaction(t, nil, true)
+	if strings.Contains(body, "[REDACTED]") {
+		t.Errorf("banner should be absent when there are no diffs:\n%s", body)
+	}
+	if !strings.Contains(body, "No differences") {
+		t.Error("expected 'No differences' message")
+	}
+}

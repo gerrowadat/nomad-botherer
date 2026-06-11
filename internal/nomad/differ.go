@@ -101,6 +101,10 @@ type Differ struct {
 	// default), the live job's meta is checked; the HCL meta is used as a
 	// fallback only when the job does not yet exist in Nomad.
 	metaHCLCanonical bool
+	// redactSecrets replaces potentially sensitive plan-diff values (env vars,
+	// templates, secret-like keys) with RedactedValue before the diff is
+	// stored, so no downstream consumer can expose them.
+	redactSecrets bool
 
 	mu             sync.RWMutex
 	diffs          []JobDiff
@@ -115,6 +119,7 @@ type Differ struct {
 	diffChecks       prometheus.Counter
 	diffChecksSkipped prometheus.Counter
 	staleChecks      prometheus.Counter
+	redactedFields   prometheus.Counter
 	jobsSkippedBySel *prometheus.CounterVec
 	nomadAPIErrors   *prometheus.CounterVec
 	lastCheck        prometheus.Gauge
@@ -124,7 +129,7 @@ type Differ struct {
 }
 
 // newDifferBase constructs a Differ with metrics registered into reg.
-func newDifferBase(jobs NomadJobsClient, namespace string, includeDeadJobs bool, jobSelectorGlob, managedMetaPrefix string, metaHCLCanonical bool, reg prometheus.Registerer) *Differ {
+func newDifferBase(jobs NomadJobsClient, namespace string, includeDeadJobs bool, jobSelectorGlob, managedMetaPrefix string, metaHCLCanonical, redactSecrets bool, reg prometheus.Registerer) *Differ {
 	f := promauto.With(reg)
 	d := &Differ{
 		jobs:              jobs,
@@ -133,6 +138,7 @@ func newDifferBase(jobs NomadJobsClient, namespace string, includeDeadJobs bool,
 		jobSelectorGlob:   jobSelectorGlob,
 		managedMetaPrefix: managedMetaPrefix,
 		metaHCLCanonical:  metaHCLCanonical,
+		redactSecrets:     redactSecrets,
 		driftFirstSeen:    make(map[string]time.Time),
 		hclParseErrors: f.NewCounter(prometheus.CounterOpts{
 			Name: "nomad_botherer_hcl_parse_errors_total",
@@ -153,6 +159,10 @@ func newDifferBase(jobs NomadJobsClient, namespace string, includeDeadJobs bool,
 		staleChecks: f.NewCounter(prometheus.CounterOpts{
 			Name: "nomad_botherer_nomad_staleness_checks_total",
 			Help: "Total number of Nomad diff checks triggered by the staleness check.",
+		}),
+		redactedFields: f.NewCounter(prometheus.CounterOpts{
+			Name: "nomad_botherer_diff_fields_redacted_total",
+			Help: "Total number of potentially sensitive plan-diff field values redacted before storage.",
 		}),
 		jobsSkippedBySel: f.NewCounterVec(prometheus.CounterOpts{
 			Name: "nomad_botherer_jobs_skipped_by_selector_total",
@@ -208,18 +218,18 @@ func NewDiffer(cfg *config.Config) (*Differ, error) {
 		return nil, fmt.Errorf("creating nomad client: %w", err)
 	}
 
-	return newDifferBase(client.Jobs(), cfg.NomadNamespace, cfg.IncludeDeadJobs, cfg.JobSelectorGlob, cfg.ManagedMetaPrefix, cfg.ManagedMetaHCLCanonical, prometheus.DefaultRegisterer), nil
+	return newDifferBase(client.Jobs(), cfg.NomadNamespace, cfg.IncludeDeadJobs, cfg.JobSelectorGlob, cfg.ManagedMetaPrefix, cfg.ManagedMetaHCLCanonical, cfg.RedactSecrets, prometheus.DefaultRegisterer), nil
 }
 
 // NewWithClient creates a Differ with a custom jobs client, intended for tests.
 func NewWithClient(cfg *config.Config, jobs NomadJobsClient) *Differ {
-	return newDifferBase(jobs, cfg.NomadNamespace, cfg.IncludeDeadJobs, cfg.JobSelectorGlob, cfg.ManagedMetaPrefix, cfg.ManagedMetaHCLCanonical, prometheus.NewRegistry())
+	return newDifferBase(jobs, cfg.NomadNamespace, cfg.IncludeDeadJobs, cfg.JobSelectorGlob, cfg.ManagedMetaPrefix, cfg.ManagedMetaHCLCanonical, cfg.RedactSecrets, prometheus.NewRegistry())
 }
 
 // NewWithClientAndRegistry creates a Differ with a custom jobs client and Prometheus
 // registry. Use this in tests that need to inspect metric values.
 func NewWithClientAndRegistry(cfg *config.Config, jobs NomadJobsClient, reg prometheus.Registerer) *Differ {
-	return newDifferBase(jobs, cfg.NomadNamespace, cfg.IncludeDeadJobs, cfg.JobSelectorGlob, cfg.ManagedMetaPrefix, cfg.ManagedMetaHCLCanonical, reg)
+	return newDifferBase(jobs, cfg.NomadNamespace, cfg.IncludeDeadJobs, cfg.JobSelectorGlob, cfg.ManagedMetaPrefix, cfg.ManagedMetaHCLCanonical, cfg.RedactSecrets, reg)
 }
 
 // metaKeyPresent reports whether the managed meta key is set in meta.
@@ -387,6 +397,13 @@ func (d *Differ) checkHCLCandidate(jobID string, entry hclEntry, q *nomadapi.Que
 		isDead := nomadJob != nil && nomadJob.Status != nil && *nomadJob.Status == "dead"
 		if isDead && !hasContentDiff(plan.Diff) {
 			return true, reason, nil
+		}
+		// Redact before the diff is stored so potentially sensitive values
+		// never reach /diffs or any other consumer of the stored state.
+		if d.redactSecrets {
+			if n := RedactJobDiff(plan.Diff); n > 0 {
+				d.redactedFields.Add(float64(n))
+			}
 		}
 		return true, reason, &JobDiff{
 			JobID:    jobID,

@@ -38,6 +38,12 @@ type GitStatusSource interface {
 	Ready() bool
 }
 
+// maxWebhookBodyBytes caps the webhook request body. GitHub limits webhook
+// payloads to 25 MB; anything larger is not a legitimate delivery. Without a
+// cap the webhook library reads the entire body into memory, which lets an
+// attacker exhaust memory by streaming an arbitrarily large request.
+const maxWebhookBodyBytes = 25 << 20
+
 // Server holds the HTTP mux and all dependencies.
 type Server struct {
 	cfg       *config.Config
@@ -45,6 +51,7 @@ type Server struct {
 	git       GitStatusSource
 	buildInfo BuildInfo
 	mux       *http.ServeMux
+	handler   http.Handler // mux wrapped in securityHeaders
 
 	webhookMu               sync.RWMutex
 	lastWebhookSuccess      time.Time
@@ -121,7 +128,26 @@ func NewWithRegistry(cfg *config.Config, diffs DiffSource, git GitStatusSource, 
 		slog.Warn("API key not configured; /api/ endpoints are disabled. Set --api-key / API_KEY to enable.")
 	}
 
+	s.handler = securityHeaders{next: s.mux}
+
 	return s
+}
+
+// securityHeaders sets standard hardening headers on every response. The web
+// console serves no scripts and is never meant to be framed or sniffed.
+// It is a comparable struct (not an http.HandlerFunc) so values returned by
+// Server.Handler can be compared with ==.
+type securityHeaders struct {
+	next http.Handler
+}
+
+func (s securityHeaders) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	h := w.Header()
+	h.Set("X-Content-Type-Options", "nosniff")
+	h.Set("X-Frame-Options", "DENY")
+	h.Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'")
+	h.Set("Referrer-Policy", "no-referrer")
+	s.next.ServeHTTP(w, r)
 }
 
 // newHTTPServer constructs the http.Server with timeouts to prevent slowloris
@@ -129,7 +155,7 @@ func NewWithRegistry(cfg *config.Config, diffs DiffSource, git GitStatusSource, 
 func (s *Server) newHTTPServer() *http.Server {
 	return &http.Server{
 		Addr:              s.cfg.ListenAddr,
-		Handler:           s.mux,
+		Handler:           s.handler,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      30 * time.Second,
@@ -157,7 +183,7 @@ func (s *Server) Run(ctx context.Context) error {
 // Handler returns the underlying http.Handler, useful for testing without a
 // real listener.
 func (s *Server) Handler() http.Handler {
-	return s.mux
+	return s.handler
 }
 
 var indexTmpl = template.Must(template.New("index").Parse(`<!DOCTYPE html>
@@ -296,7 +322,7 @@ func (s *Server) handleDiffs(w http.ResponseWriter, r *http.Request) {
 	}
 	diffs, lastCheck, commit := s.diffs.Diffs()
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	fmt.Fprint(w, renderDiffsText(diffs, lastCheck, commit))
+	fmt.Fprint(w, renderDiffsText(diffs, lastCheck, commit, s.cfg.RedactSecrets))
 }
 
 // HealthResponse is the JSON body returned by /healthz.
@@ -394,6 +420,10 @@ func (s *Server) handleWebhook() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		eventType := r.Header.Get("X-GitHub-Event")
 		deliveryID := r.Header.Get("X-GitHub-Delivery")
+
+		// The webhook library reads the whole body into memory; cap it so an
+		// oversized request fails instead of exhausting memory.
+		r.Body = http.MaxBytesReader(w, r.Body, maxWebhookBodyBytes)
 
 		payload, err := hook.Parse(r, webhookgithub.PushEvent, webhookgithub.PingEvent)
 		if err != nil {

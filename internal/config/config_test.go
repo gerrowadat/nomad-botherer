@@ -494,3 +494,72 @@ func TestLoadFromArgs_ManagedMetaHCLCanonicalEnv(t *testing.T) {
 		t.Error("ManagedMetaHCLCanonical: want true from env var, got false")
 	}
 }
+
+func TestLoadFromArgs_GitTokenWithPlainHTTPRejected(t *testing.T) {
+	os.Unsetenv("GIT_REPO_URL")
+	os.Unsetenv("GIT_TOKEN")
+	for _, url := range []string{"http://example.com/repo.git", "HTTP://example.com/repo.git"} {
+		_, err := LoadFromArgs(newFS(), []string{"--repo-url", url, "--git-token", "secret-token"})
+		if err == nil {
+			t.Errorf("repo URL %q with git token: want error (cleartext token), got nil", url)
+		}
+	}
+}
+
+func TestLoadFromArgs_GitTokenWithHTTPSAccepted(t *testing.T) {
+	os.Unsetenv("GIT_REPO_URL")
+	os.Unsetenv("GIT_TOKEN")
+	cfg, err := LoadFromArgs(newFS(), []string{"--repo-url", "https://example.com/repo.git", "--git-token", "secret-token"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.GitToken != "secret-token" {
+		t.Errorf("unexpected GitToken: %q", cfg.GitToken)
+	}
+}
+
+func TestLoadFromArgs_PlainHTTPWithoutTokenAccepted(t *testing.T) {
+	os.Unsetenv("GIT_REPO_URL")
+	os.Unsetenv("GIT_TOKEN")
+	cfg, err := LoadFromArgs(newFS(), []string{"--repo-url", "http://example.com/repo.git"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.RepoURL != "http://example.com/repo.git" {
+		t.Errorf("unexpected RepoURL: %q", cfg.RepoURL)
+	}
+}
+
+func TestLoadFromArgs_RedactSecretsDefault(t *testing.T) {
+	os.Unsetenv("REDACT_SECRETS")
+	cfg, err := LoadFromArgs(newFS(), []string{"--repo-url", "https://example.com/r.git"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !cfg.RedactSecrets {
+		t.Error("RedactSecrets: want true by default, got false")
+	}
+}
+
+func TestLoadFromArgs_RedactSecretsFlagOff(t *testing.T) {
+	os.Unsetenv("REDACT_SECRETS")
+	cfg, err := LoadFromArgs(newFS(), []string{"--repo-url", "https://example.com/r.git", "--redact-secrets=false"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.RedactSecrets {
+		t.Error("RedactSecrets: want false after --redact-secrets=false, got true")
+	}
+}
+
+func TestLoadFromArgs_RedactSecretsEnvOff(t *testing.T) {
+	os.Setenv("REDACT_SECRETS", "false")
+	t.Cleanup(func() { os.Unsetenv("REDACT_SECRETS") })
+	cfg, err := LoadFromArgs(newFS(), []string{"--repo-url", "https://example.com/r.git"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.RedactSecrets {
+		t.Error("RedactSecrets: want false from env var, got true")
+	}
+}

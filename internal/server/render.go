@@ -12,8 +12,9 @@ import (
 )
 
 // renderDiffsText produces a nomad-job-plan-style plain-text representation
-// of the current diff state.
-func renderDiffsText(diffs []nomad.JobDiff, lastCheck time.Time, commit string) string {
+// of the current diff state. When redactionEnabled is true a banner states
+// that potentially sensitive values have been replaced with [REDACTED].
+func renderDiffsText(diffs []nomad.JobDiff, lastCheck time.Time, commit string, redactionEnabled bool) string {
 	var b strings.Builder
 
 	fmt.Fprintln(&b, "nomad-botherer diff report")
@@ -28,6 +29,9 @@ func renderDiffsText(diffs []nomad.JobDiff, lastCheck time.Time, commit string) 
 	}
 
 	fmt.Fprintf(&b, "%d difference(s) detected:\n", len(diffs))
+	if redactionEnabled {
+		fmt.Fprintf(&b, "NOTE: potentially sensitive values (env vars, template bodies, secret-like keys) are shown as %s. Disable with --redact-secrets=false.\n", nomad.RedactedValue)
+	}
 
 	for _, d := range diffs {
 		fmt.Fprintln(&b)

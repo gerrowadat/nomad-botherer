@@ -1,6 +1,7 @@
 package server
 
 import (
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
 	"net/http"
@@ -51,12 +52,15 @@ type errorResponse struct {
 
 // requireAPIKey returns a middleware that enforces Bearer token authentication.
 // If apiKey is empty every request is rejected with a clear 401.
+// Both sides are hashed before the constant-time compare: ConstantTimeCompare
+// returns immediately on unequal lengths, which would otherwise leak the key
+// length through response timing.
 func requireAPIKey(apiKey string) func(http.Handler) http.Handler {
-	expected := []byte("Bearer " + apiKey)
+	expected := sha256.Sum256([]byte("Bearer " + apiKey))
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			auth := r.Header.Get("Authorization")
-			if apiKey == "" || subtle.ConstantTimeCompare([]byte(auth), expected) != 1 {
+			got := sha256.Sum256([]byte(r.Header.Get("Authorization")))
+			if apiKey == "" || subtle.ConstantTimeCompare(got[:], expected[:]) != 1 {
 				writeJSON(w, http.StatusUnauthorized, errorResponse{Error: "unauthorized"})
 				return
 			}

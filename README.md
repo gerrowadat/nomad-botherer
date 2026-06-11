@@ -291,7 +291,7 @@ Every flag has a corresponding environment variable. Environment variables are r
 | `--branch` | `GIT_BRANCH` | `main` | Branch to watch |
 | `--poll-interval` | `POLL_INTERVAL` | `5m` | How often to poll git for changes |
 | `--hcl-dir` | `HCL_DIR` | *(repo root)* | Subdirectory containing HCL job files |
-| `--git-token` | `GIT_TOKEN` | | HTTP token for private repos (GitHub PAT etc.) |
+| `--git-token` | `GIT_TOKEN` | | HTTP token for private repos (GitHub PAT etc.). Requires an `https://` repo URL; refused for plain `http://` URLs, which would send the token in cleartext. |
 | `--git-ssh-key` | `GIT_SSH_KEY` | | Path to SSH private key |
 | `--git-ssh-key-password` | `GIT_SSH_KEY_PASSWORD` | | SSH key passphrase |
 | `--git-ssh-known-hosts` | `GIT_SSH_KNOWN_HOSTS` | `~/.ssh/known_hosts` | Path to known_hosts file for SSH host key verification; required when using SSH auth. Defaults to the system known_hosts locations. Omit to allow the default search, or set explicitly to a specific file. |
@@ -304,6 +304,7 @@ Every flag has a corresponding environment variable. Environment variables are r
 | `--api-key` | `API_KEY` | *(empty — disabled)* | Pre-shared key for `/api/` endpoints (Bearer token). Empty disables the JSON API. |
 | `--diff-interval` | `DIFF_INTERVAL` | `1m` | Periodic Nomad-side drift check interval |
 | `--include-dead-jobs` | `INCLUDE_DEAD_JOBS` | `false` | Treat dead Nomad jobs like running ones (by default dead jobs count as missing) |
+| `--redact-secrets` | `REDACT_SECRETS` | `true` | Redact potentially sensitive plan-diff values before they are stored or rendered. Env vars, template bodies, and fields with secret-like names (`password`, `token`, `secret`, ...) are shown as `[REDACTED]`; the diff structure and field names are kept. Set to `false` to show real values. |
 | `--job-selector-glob` | `JOB_SELECTOR_GLOB` | *(empty — no glob)* | Glob pattern selecting jobs to watch by name (e.g. `myprefix-*`, `*` for all). Combined with `--managed-meta-prefix` as a union. |
 | `--managed-meta-prefix` | `MANAGED_META_PREFIX` | `gitops` | Prefix for job meta keys used by nomad-botherer. With prefix `gitops`, the key `gitops_managed = "true"` opts a job in. Empty disables meta-based selection. |
 | `--managed-meta-hcl-canonical` | `MANAGED_META_HCL_CANONICAL` | `false` | When false (default), the live Nomad job's meta is the source of truth for managed-meta-prefix selection. When true, the HCL file is sufficient to opt a job in even if the running job does not carry the key. |
@@ -331,6 +332,8 @@ Configuring a webhook removes the latency between a push to the repo and the nex
 The service handles `push` events (triggers a fetch + diff) and `ping` events (acknowledged, no action). All other event types are silently ignored with a `200 OK`.
 
 If `--webhook-secret` is empty, signature verification is skipped. In production, always set a secret.
+
+Webhook request bodies are capped at 25 MB (GitHub's own payload limit); larger requests are rejected with `400 Bad Request` before being read into memory.
 
 ---
 
@@ -440,6 +443,8 @@ Returns **HTTP 200** once the server has built its initial state (completed the 
 
 The `/diffs` endpoint and all `/api/v1/` endpoints that return state also return HTTP 503 during startup.
 
+By default (`--redact-secrets`), values that might be secrets are redacted from plan diffs before they are stored, so `/diffs` shows them as `[REDACTED]` with a `(value redacted)` annotation, and a banner in the output says so. This covers all env vars, template bodies (`template` stanza contents), and any field whose name contains a secret-like keyword (e.g. `Meta[db_password]`, `Config[registry_token]`). The shape of the diff — field names, added/deleted/edited markers, nesting — is unchanged.
+
 ### `/metrics`
 
 Standard Prometheus exposition endpoint. All metric names are prefixed with `nomad_botherer_`.
@@ -466,6 +471,7 @@ These counters and timestamps describe the diff check loop itself — how often 
 | `nomad_botherer_nomad_api_errors_total` | Counter | `op` (`info`, `plan`, `list`) | Nomad API call failures by operation. `info` = job lookup, `plan` = drift plan, `list` = listing all jobs. A rising count means drift results may be incomplete for that operation. |
 | `nomad_botherer_hcl_parse_errors_total` | Counter | — | HCL files that failed to parse via the Nomad API. These files are skipped; the rest of the check continues. |
 | `nomad_botherer_hcl_non_job_files_skipped_total` | Counter | — | HCL files that were skipped because they contain no `job` stanza (e.g. ACL policies, volumes). Expected and normal; a rising rate may indicate `--hcl-dir` is set too broadly. |
+| `nomad_botherer_diff_fields_redacted_total` | Counter | — | Plan-diff field values replaced with `[REDACTED]` before storage (only when `--redact-secrets` is on). A rising count means drifted jobs have changes in env vars, templates, or secret-like fields. |
 
 #### Git tracking
 

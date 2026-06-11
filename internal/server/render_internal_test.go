@@ -13,7 +13,7 @@ import (
 // TestRenderDiffsText_ZeroLastCheck verifies that a zero lastCheck time omits
 // the "Last check:" line from the output.
 func TestRenderDiffsText_ZeroLastCheck(t *testing.T) {
-	out := renderDiffsText(nil, time.Time{}, "")
+	out := renderDiffsText(nil, time.Time{}, "", false)
 	if strings.Contains(out, "Last check:") {
 		t.Error("zero lastCheck should not produce a 'Last check:' line")
 	}
@@ -45,7 +45,7 @@ func TestRenderObjects(t *testing.T) {
 			},
 		},
 	}
-	out := renderDiffsText(diffs, time.Now(), "abc123")
+	out := renderDiffsText(diffs, time.Now(), "abc123", false)
 	if !strings.Contains(out, "Meta") {
 		t.Error("object name should appear in output")
 	}
@@ -86,7 +86,7 @@ func TestRenderObjects_Nested(t *testing.T) {
 			},
 		},
 	}
-	out := renderDiffsText(diffs, time.Now(), "abc123")
+	out := renderDiffsText(diffs, time.Now(), "abc123", false)
 	if !strings.Contains(out, "Outer") {
 		t.Error("outer object name should appear in output")
 	}
@@ -135,7 +135,7 @@ func TestRenderFields_EditedType(t *testing.T) {
 			},
 		},
 	}
-	out := renderDiffsText(diffs, time.Now(), "abc123")
+	out := renderDiffsText(diffs, time.Now(), "abc123", false)
 	if !strings.Contains(out, `~ count: "1" => "3"`) {
 		t.Errorf("edited field should render with '~' and old/new values, got:\n%s", out)
 	}
