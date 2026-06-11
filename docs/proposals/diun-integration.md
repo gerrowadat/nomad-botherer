@@ -3,14 +3,16 @@
 **Status**: draft  
 **Date**: 2026-06-11
 
-> **Revision note**: an earlier draft of this proposal had nomad-botherer
-> receiving Diun's webhooks, persisting "available update" records in Nomad
-> Variables, and serving them from an API. That has been removed. A Diun
-> notification is not actionable by nomad-botherer — nothing may change in
-> Nomad until Git changes, and nomad-botherer already watches Git — so
-> consuming notifications added state (the only state in the design not
-> recomputable from Git and Nomad) without adding behaviour. Closing the
-> notification-to-Git loop now lives explicitly outside the tool.
+> **Revision note**: this proposal has shrunk twice, deliberately. An early
+> draft had nomad-botherer receiving Diun's webhooks and persisting
+> "available update" records; that went away because a notification is not
+> actionable by nomad-botherer (nothing changes in Nomad until Git changes)
+> and would have been the only state in the design not recomputable from Git
+> and Nomad. A second draft had nomad-botherer generating Diun's watch list
+> from the HCL in Git; that went away because Diun's own Nomad provider
+> covers the need with zero integration code. The result: **nomad-botherer
+> and Diun do not talk to each other at all.** The only thing this proposal
+> adds to nomad-botherer is a stateless patch endpoint.
 
 ## Background
 
@@ -23,19 +25,16 @@ something Git manages, and making it easy to act on.
 [Diun](https://github.com/crazy-max/diun) (Docker Image Update Notifier,
 crazy-max/diun) is the established tool for this: it watches container
 registries for new or changed tags and sends notifications. Per the
-no-reimplementation rule, nomad-botherer should not grow its own registry
-polling; it should integrate with Diun.
+no-reimplementation rule, nomad-botherer must not grow its own registry
+polling.
 
 The constraints that frame the design:
 
-1. **Git is the source of truth for what to track.** The set of images worth
-   watching is exactly the set referenced by managed jobs in the repo. That
-   set should drive Diun, not be maintained by hand in a second place.
-2. **nomad-botherer never writes to Git.** Not directly, not via the GitHub
-   API, not on a side branch for this feature. Bumping a tag in a job file
-   is a Git change like any other: it arrives by PR, authored by a human or
-   by automation that is not this tool.
-3. **nomad-botherer acts only on Git and Nomad state.** Everything it knows
+1. **nomad-botherer never writes to Git.** Not directly, not via the GitHub
+   API, not on a side branch. Bumping a tag in a job file is a Git change
+   like any other: it arrives by PR, authored by a human or by automation
+   that is not this tool.
+2. **nomad-botherer acts only on Git and Nomad state.** Everything it knows
    must be recomputable from those two (see "Restart safety and recovery" in
    [gitops-job-updates.md](gitops-job-updates.md)). Diun notifications are
    delivered exactly once and are not recomputable, so nomad-botherer does
@@ -44,8 +43,8 @@ The constraints that frame the design:
 ## Division of labour
 
 ```
-nomad-botherer   Git HCL → derive the image watch list → expose it for Diun
-Diun             check registries on its own schedule
+Diun             watch the cluster's images (Nomad provider, all jobs)
+                 → check registries on its own schedule
                  → notify (Slack/Matrix/email/webhook/… — Diun's job)
 outside          turn a notification into a Git PR: a human, or a small
                  separate "bumper" job — either may use nomad-botherer's
@@ -55,126 +54,54 @@ nomad-botherer   ordinary GitOps apply of the merged commit (policy-gated,
                  see update-policies.md)
 ```
 
-The circle still closes — Git's images stay current, and for jobs with
+The circle closes — Git's images stay current, and for jobs with
 `gitops_update_policy = "image-only"` the merged bump is applied
-automatically — but the segment that writes to Git is outside the tool, and
-nomad-botherer's two roles in the circle are both stateless functions of
-the repo at HEAD.
+automatically — but nomad-botherer appears in it only at the two places it
+already lives: rendering a diff from the repo at HEAD, and applying merged
+commits to Nomad.
 
 ---
 
-## What Diun provides (and does not)
+## How Diun watches: the Nomad provider
 
-Facts that constrain the design, from Diun's documentation:
+Diun's Nomad provider connects to the cluster (address/token, the same
+`NOMAD_ADDR` conventions as everything else) and watches the images of
+running Docker-driver tasks. The chosen configuration is
+`watchByDefault: true`: **all jobs are watched**, managed or not, with no
+per-job opt-in required and no involvement from nomad-botherer.
 
-- **Providers** define what Diun watches: Docker, Swarm, Kubernetes,
-  **Nomad**, File, and Dockerfile. The Nomad provider connects to a cluster
-  and watches images from running Docker-driver tasks, with opt-in via
-  `diun.enable = "true"` in job/group/task meta (or service tags), plus a
-  `watchByDefault` mode. The File provider reads a YAML list of image
-  entries from the **local filesystem only** (a file or a directory; no
-  HTTP fetch).
-- **Per-image options** are the same vocabulary everywhere: `watch_repo`,
-  `include_tags` / `exclude_tags` (regexps), `max_tags`, `sort_tags`
-  (including `semver`), `notify_on` (`new`/`update`), `platform`, and a
-  free-form `metadata` map that is echoed back in notifications — useful
-  for whatever consumes them.
-- **Notifications are push-only and once-only.** Diun has no HTTP query API;
-  you cannot ask it "what updates are available?". It supports ~20
-  notification channels (including a generic webhook), and each new tag or
-  changed digest is notified **once** — Diun keeps its own seen-state in an
-  embedded store. A consumer that loses a notification does not get it
-  again. This is the property that makes notification consumption a poor
-  fit for a tool whose state must be recomputable.
-- It **never writes** to a cluster or a repo, which is exactly why it
-  composes with a GitOps operator instead of competing with one.
+Per-job tuning still lives in Git. Diun reads its `diun.*` options from job,
+group, or task meta — `diun.include_tags`, `diun.exclude_tags`,
+`diun.sort_tags` (including `semver`), `diun.watch_repo`, `diun.max_tags`,
+`diun.notify_on`, and `diun.enable = "false"` to exclude a job — and for
+managed jobs that meta is written in the HCL and flows to the live job
+through registration. So tag-filter policy remains version-controlled and
+reviewable even though nomad-botherer never touches Diun. (Dotted meta keys
+need HCL's object-expression form; see the syntax note in
+[update-policies.md](update-policies.md).)
 
----
+Accepted tradeoffs of watching the cluster rather than the repo:
 
-## Who owns the watch list
+- The watch list is the *running cluster*. A job committed to Git but never
+  registered is not watched; a stopped job drops out of tracking; during a
+  drift window the watched tag is the running one, not the declared one.
+  For a setup where everything in Git is expected to be running, these
+  windows are short and harmless.
+- Diun needs its own Nomad token with job-read access.
+- Only Docker-driver tasks are seen.
 
-Diun wants a list it owns and polls; it does not answer ad-hoc queries. The
-question is where that list comes from.
+If those tradeoffs ever bite, the previously-drafted alternative —
+nomad-botherer rendering a Diun File-provider list from the parsed HCL at
+HEAD, so Git rather than the cluster defines the watch set — is recorded in
+this file's history (and the File provider's local-filesystem-only delivery
+constraint with it). It is not part of the current design. Likewise
+querying Diun directly was examined and rejected: Diun is push-only, with
+no HTTP query API (its gRPC interface is internal to its own CLI).
 
-### Alternative A: Diun's Nomad provider, nomad-botherer uninvolved
-
-Point Diun's Nomad provider at the cluster. Jobs opt in by carrying
-`diun.enable = "true"` in their meta — which, for managed jobs, lives in the
-HCL in Git, so the opt-in is still version-controlled. nomad-botherer has no
-role at all.
-
-**Pros**
-
-- Zero code. Diun's Nomad provider already exists and is maintained.
-- The `diun.*` meta keys in HCL are human-written and round-trip through
-  registration untouched — no meta-drift.
-- Diun's default Nomad metadata (job ID, namespace, task group) is included
-  in notifications, giving the consumer job context for free.
-
-**Cons**
-
-- **The watch list is the *running cluster*, not Git.** During drift windows
-  the tracked tag is whatever is running, not what Git declares; a job
-  committed to Git but not yet registered is not watched at all; a job
-  stopped for maintenance silently drops out of tracking.
-- Diun needs its own Nomad token with job-read access, a second credential
-  to manage.
-- Only Docker-driver tasks of *running* jobs are seen.
-
-### Alternative B: nomad-botherer generates the File provider list
-
-nomad-botherer already parses every managed job's HCL each cycle. From the
-parsed jobs it derives the image watch list: every Docker task image in a
-job with `"diun.enable" = "true"` in meta, with the job's other `diun.*`
-meta keys mapped onto the corresponding File provider entry options
-(`include_tags`, `sort_tags`, `watch_repo`, …). Each entry's `metadata` map
-carries the owning job IDs and HCL file paths, so notifications arrive at
-their consumer pre-correlated with the repo.
-
-The list is exposed two ways, both stateless and regenerated from HEAD:
-
-- `GET /api/v1/diun/images.yml` — the rendered File provider YAML, always
-  available. Useful for inspection and for any external mechanism that
-  delivers it to Diun.
-- `--diun-image-list-path` / `DIUN_IMAGE_LIST_PATH` (optional): a filesystem
-  path the list is (atomically: write temp + rename) rewritten to whenever
-  HEAD changes. Intended for co-scheduling Diun and nomad-botherer in the
-  same Nomad task group with a shared `alloc/` directory; Diun's File
-  provider points at the shared path. This is a deliberate, narrow exception
-  to the no-disk-writes posture: the file is derived state, owned by this
-  feature, regenerable from Git at any time, and written outside the in-memory
-  git clone (which stays `memory.NewStorage()`).
-
-**Pros**
-
-- **Git is the source of truth**, exactly as required. Images are tracked
-  from the moment they are committed, before first registration, and
-  independently of cluster state.
-- The same `diun.*` meta vocabulary as Alternative A — switching between
-  alternatives needs no HCL changes.
-- Diun needs no Nomad credentials.
-
-**Cons**
-
-- The File provider reads local files only, so list delivery requires either
-  co-scheduling with a shared alloc dir or an external fetch-to-disk step.
-- More code in nomad-botherer: list rendering, the endpoint, the file
-  writer, and their tests.
-
-### Alternative C: query Diun directly — rejected
-
-Diun has a gRPC API used by its own CLI (`diun image list`), bound to
-localhost by default. It is an internal interface, not a stable integration
-surface, and polling it would still leave Diun's watch list to be maintained
-somewhere. This alternative is noted only because "nomad-botherer asks Diun"
-sounds plausible until the shape of Diun's API is examined.
-
-### Verdict
-
-Alternative B. Alternative A remains a valid zero-code deployment for setups
-that don't care about the drift-window and not-yet-registered caveats; since
-nomad-botherer is uninvolved in notification consumption either way, nothing
-in this tool needs to know which alternative a deployment chose.
+One Diun behaviour worth knowing operationally: each new tag or changed
+digest is notified **once**, with seen-state kept in Diun's embedded store.
+If that store is lost (ephemeral disk, reschedule), everything is re-notified
+once — noise for the notification consumer, irrelevant to nomad-botherer.
 
 ---
 
@@ -263,50 +190,43 @@ path under the job's [update policy](update-policies.md) — for jobs set to
 Following the metrics convention (`promauto.With(reg)`, `nomad_botherer_`
 prefix):
 
-- `nomad_botherer_diun_image_list_entries` — gauge; entries in the generated
-  watch list.
-- `nomad_botherer_diun_image_list_writes_total` / `…_write_errors_total` —
-  counters; rewrites of the `--diun-image-list-path` file.
 - `nomad_botherer_image_patches_served_total` — counter.
 - `nomad_botherer_image_patch_errors_total{reason}` — counter; `reason` of
   `unknown_repository` or `non_literal_reference`.
 
+Diun has its own Prometheus metrics for the registry-watching side; nothing
+to duplicate here.
+
 ---
 
-## Deployment sketch (Alternative B, co-scheduled)
+## Deployment sketch
 
-One Nomad job, one group, two tasks sharing the allocation directory:
+Diun runs as its own Nomad job, independent of nomad-botherer:
 
-- `nomad-botherer` with
-  `--diun-image-list-path=${NOMAD_ALLOC_DIR}/data/diun/images.yml`.
-- `diun` with the File provider pointed at that path, its embedded state db
-  on ephemeral task disk — losing it merely re-notifies everything once,
-  which is the notification consumer's noise to absorb, not
-  nomad-botherer's — and notifiers configured for wherever the loop is
-  closed (a chat channel for the manual workflow, the bumper job's endpoint
-  for the automated one).
+- Nomad provider: cluster address, a read-only Nomad token,
+  `watchByDefault: true`.
+- Embedded state db on ephemeral task disk (loss is tolerable: one round of
+  re-notification).
+- Notifiers pointed wherever the loop is closed — a chat channel for the
+  manual workflow, the bumper job's endpoint for the automated one.
 
-No volumes, no external services; the whole pair is reschedulable to any
-node, preserving the no-volume-claims principle.
+nomad-botherer needs no Diun-related configuration at all; the patch
+endpoint is part of its normal HTTP server.
 
 ---
 
 ## Open questions
 
-- **Tag constraint defaults.** Should jobs without `diun.include_tags` get a
-  generated default (e.g. `sort_tags: semver` + `watch_repo: true`), or the
-  Diun defaults? Generated defaults are friendlier but more magic.
-- **Shared images with conflicting constraints.** Two jobs watching the same
-  repository with different `diun.*` options need either merged constraints
-  in one File entry or one entry per distinct (repository, constraints)
-  pair. The latter is simpler; verify Diun deduplicates registry calls
-  itself.
 - **Digest-only re-pushes.** Diun's `status: update` (same tag, new digest)
   has no HCL expression — the file already names the right tag — so the
   patch endpoint can do nothing with it. It is still a signal worth routing
   somewhere (a mutable pinned tag changed under you), but that routing is
   the notification consumer's concern.
-- **List staleness on the shared-file path.** If nomad-botherer is down, the
-  last-written list file persists and Diun keeps watching a stale set. That
-  is benign (it is at worst yesterday's truth) but worth a line in the
-  README when implemented.
+- **Tag-constraint hygiene.** With `watchByDefault: true` and no
+  `diun.include_tags`, noisy repositories (nightly tags, arch-suffixed tags)
+  may generate notification spam. That is tuned per job in HCL via `diun.*`
+  meta, which is a documentation task here, not a code one.
+- **Patch endpoint and unmanaged jobs.** Diun watches *all* jobs, but the
+  patch endpoint only knows files of managed ones. A notification for an
+  unmanaged job's image gets a `404` from the endpoint — correct, but the
+  README should say so to avoid confusion.

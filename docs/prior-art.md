@@ -114,8 +114,9 @@ tag regexes, semver sorting, and notify-on-new vs notify-on-update. It
 deliberately *only notifies*: it never writes to a cluster or a repo, has no
 query API (push-only, each event delivered once), and keeps its own seen-state
 in an embedded store. This makes it composable with a GitOps operator rather
-than competing with one. nomad-botherer's planned integration is one-way:
-generate Diun's watch list from the managed jobs in Git, and offer a patch
+than competing with one. The planned setup points Diun's Nomad provider at
+the cluster, watching all jobs; nomad-botherer and Diun do not talk to each
+other at all. nomad-botherer's only contribution is a read-only patch
 endpoint for whoever acts on the notifications — consuming them and writing
 the bump to Git stays outside the tool.
 
@@ -203,10 +204,11 @@ touched, even if it is running in Nomad without a corresponding HCL file. This
 prevents accidental deregistration of manually-managed jobs.
 
 **No external database for state.** nomad-ops requires SQLite on persistent
-storage. The design proposals describe three alternatives that avoid this: Nomad
-Variables (Raft-backed KV built into Nomad 1.4+), a dedicated Git state branch,
-or deriving restart state from per-job metadata. The goal is that nomad-botherer
-can be rescheduled to any node without volume claims.
+storage. The design proposals use Nomad Variables (Raft-backed KV built into
+Nomad 1.4+) for checkpoint state instead, paired with a meta opt-in scope
+selector; a dedicated Git state branch was considered and rejected, because
+nomad-botherer never writes to Git. The goal is that nomad-botherer can be
+rescheduled to any node without volume claims.
 
 **Async apply queue, not synchronous blocking.** An in-process queue decouples
 detection from application. A slow or failing apply does not delay the next diff
