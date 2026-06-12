@@ -87,6 +87,7 @@ type NomadJobsClient interface {
 	Plan(job *nomadapi.Job, diff bool, q *nomadapi.WriteOptions) (*nomadapi.JobPlanResponse, *nomadapi.WriteMeta, error)
 	Info(jobID string, q *nomadapi.QueryOptions) (*nomadapi.Job, *nomadapi.QueryMeta, error)
 	List(q *nomadapi.QueryOptions) ([]*nomadapi.JobListStub, *nomadapi.QueryMeta, error)
+	RegisterOpts(job *nomadapi.Job, opts *nomadapi.RegisterOptions, q *nomadapi.WriteOptions) (*nomadapi.JobRegisterResponse, *nomadapi.WriteMeta, error)
 }
 
 // Differ runs periodic diff checks and stores the latest results.
@@ -105,6 +106,19 @@ type Differ struct {
 	// templates, secret-like keys) with RedactedValue before the diff is
 	// stored, so no downstream consumer can expose them.
 	redactSecrets bool
+
+	// defaultPolicy is the update policy applied to managed jobs whose HCL
+	// meta carries no <prefix>_update_policy key. Defaults to "none": detect
+	// and surface drift, never apply it.
+	defaultPolicy UpdatePolicy
+	// enableJobCreation gates first-time registration of jobs that exist in
+	// Git but not in Nomad. Off by default.
+	enableJobCreation bool
+	// applyInterval is the fallback cadence of the applier loop; enqueues
+	// also wake it immediately via applyCh.
+	applyInterval time.Duration
+	updateQueue   *UpdateQueue
+	applyCh       chan struct{}
 
 	mu             sync.RWMutex
 	diffs          []JobDiff
@@ -126,19 +140,38 @@ type Differ struct {
 	jobDiffs         *prometheus.GaugeVec
 	driftedJobs      *prometheus.GaugeVec
 	jobDriftSince    *prometheus.GaugeVec
+
+	updatesBlockedByPolicy         *prometheus.CounterVec
+	updatesBlockedCreationDisabled *prometheus.CounterVec
+	jobUpdatesTotal                *prometheus.CounterVec
+	pendingUpdates                 prometheus.Gauge
 }
 
-// newDifferBase constructs a Differ with metrics registered into reg.
-func newDifferBase(jobs NomadJobsClient, namespace string, includeDeadJobs bool, jobSelectorGlob, managedMetaPrefix string, metaHCLCanonical, redactSecrets bool, reg prometheus.Registerer) *Differ {
+// newDifferBase constructs a Differ from config with metrics registered into reg.
+func newDifferBase(jobs NomadJobsClient, cfg *config.Config, reg prometheus.Registerer) *Differ {
+	defaultPolicy := UpdatePolicy(cfg.DefaultUpdatePolicy)
+	if !ValidUpdatePolicy(cfg.DefaultUpdatePolicy) {
+		defaultPolicy = UpdatePolicyNone
+	}
+	applyInterval := cfg.ApplyInterval
+	if applyInterval <= 0 {
+		applyInterval = 10 * time.Second
+	}
+
 	f := promauto.With(reg)
 	d := &Differ{
 		jobs:              jobs,
-		namespace:         namespace,
-		includeDeadJobs:   includeDeadJobs,
-		jobSelectorGlob:   jobSelectorGlob,
-		managedMetaPrefix: managedMetaPrefix,
-		metaHCLCanonical:  metaHCLCanonical,
-		redactSecrets:     redactSecrets,
+		namespace:         cfg.NomadNamespace,
+		includeDeadJobs:   cfg.IncludeDeadJobs,
+		jobSelectorGlob:   cfg.JobSelectorGlob,
+		managedMetaPrefix: cfg.ManagedMetaPrefix,
+		metaHCLCanonical:  cfg.ManagedMetaHCLCanonical,
+		redactSecrets:     cfg.RedactSecrets,
+		defaultPolicy:     defaultPolicy,
+		enableJobCreation: cfg.EnableJobCreation,
+		applyInterval:     applyInterval,
+		updateQueue:       NewUpdateQueue(),
+		applyCh:           make(chan struct{}, 1),
 		driftFirstSeen:    make(map[string]time.Time),
 		hclParseErrors: f.NewCounter(prometheus.CounterOpts{
 			Name: "nomad_botherer_hcl_parse_errors_total",
@@ -188,6 +221,22 @@ func newDifferBase(jobs NomadJobsClient, namespace string, includeDeadJobs bool,
 			Name: "nomad_botherer_job_drift_first_seen_timestamp_seconds",
 			Help: "Unix timestamp when drift was first detected for each job. Cleared when drift resolves. Use time()-metric to get seconds in drift state.",
 		}, []string{"job", "diff_type"}),
+		updatesBlockedByPolicy: f.NewCounterVec(prometheus.CounterOpts{
+			Name: "nomad_botherer_updates_blocked_by_policy_total",
+			Help: "Detected diffs that would have produced a JobUpdate but were filtered out by the effective update policy.",
+		}, []string{"job", "policy"}),
+		updatesBlockedCreationDisabled: f.NewCounterVec(prometheus.CounterOpts{
+			Name: "nomad_botherer_updates_blocked_creation_disabled_total",
+			Help: "First-time registrations blocked because --enable-job-creation is off.",
+		}, []string{"job"}),
+		jobUpdatesTotal: f.NewCounterVec(prometheus.CounterOpts{
+			Name: "nomad_botherer_job_updates_total",
+			Help: "JobUpdates reaching a terminal state, by operation and status.",
+		}, []string{"operation", "status"}),
+		pendingUpdates: f.NewGauge(prometheus.GaugeOpts{
+			Name: "nomad_botherer_job_updates_pending",
+			Help: "Number of JobUpdates currently waiting to be applied.",
+		}),
 	}
 
 	// Pre-populate Vec metrics for all finite label values so they appear in
@@ -195,8 +244,11 @@ func newDifferBase(jobs NomadJobsClient, namespace string, includeDeadJobs bool,
 	for _, src := range []string{"hcl", "nomad"} {
 		d.jobsSkippedBySel.WithLabelValues(src)
 	}
-	for _, op := range []string{"list", "info", "plan"} {
+	for _, op := range []string{"list", "info", "plan", "register"} {
 		d.nomadAPIErrors.WithLabelValues(op)
+	}
+	for _, st := range []JobUpdateStatus{JobUpdateStatusSucceeded, JobUpdateStatusFailed, JobUpdateStatusSuperseded} {
+		d.jobUpdatesTotal.WithLabelValues(string(JobUpdateOperationRegister), string(st))
 	}
 	for _, dt := range []string{string(DiffTypeModified), string(DiffTypeMissingFromNomad), string(DiffTypeMissingFromHCL)} {
 		d.driftedJobs.WithLabelValues(dt)
@@ -218,18 +270,18 @@ func NewDiffer(cfg *config.Config) (*Differ, error) {
 		return nil, fmt.Errorf("creating nomad client: %w", err)
 	}
 
-	return newDifferBase(client.Jobs(), cfg.NomadNamespace, cfg.IncludeDeadJobs, cfg.JobSelectorGlob, cfg.ManagedMetaPrefix, cfg.ManagedMetaHCLCanonical, cfg.RedactSecrets, prometheus.DefaultRegisterer), nil
+	return newDifferBase(client.Jobs(), cfg, prometheus.DefaultRegisterer), nil
 }
 
 // NewWithClient creates a Differ with a custom jobs client, intended for tests.
 func NewWithClient(cfg *config.Config, jobs NomadJobsClient) *Differ {
-	return newDifferBase(jobs, cfg.NomadNamespace, cfg.IncludeDeadJobs, cfg.JobSelectorGlob, cfg.ManagedMetaPrefix, cfg.ManagedMetaHCLCanonical, cfg.RedactSecrets, prometheus.NewRegistry())
+	return newDifferBase(jobs, cfg, prometheus.NewRegistry())
 }
 
 // NewWithClientAndRegistry creates a Differ with a custom jobs client and Prometheus
 // registry. Use this in tests that need to inspect metric values.
 func NewWithClientAndRegistry(cfg *config.Config, jobs NomadJobsClient, reg prometheus.Registerer) *Differ {
-	return newDifferBase(jobs, cfg.NomadNamespace, cfg.IncludeDeadJobs, cfg.JobSelectorGlob, cfg.ManagedMetaPrefix, cfg.ManagedMetaHCLCanonical, cfg.RedactSecrets, reg)
+	return newDifferBase(jobs, cfg, reg)
 }
 
 // metaKeyPresent reports whether the managed meta key is set in meta.
@@ -327,11 +379,32 @@ func (d *Differ) parseHCLCandidates(hclFiles map[string]string) map[string]hclEn
 	return entries
 }
 
+// updateCandidate carries the context needed to turn a detected diff into a
+// JobUpdate: the parsed job, the CAS token, and the diff classification.
+// Policy gating happens later, in maybeEnqueueUpdate.
+type updateCandidate struct {
+	jobID       string
+	hclFile     string
+	job         *nomadapi.Job
+	modifyIndex uint64
+	class       DiffClass
+	isCreation  bool // job absent (or dead) in Nomad: first-time registration
+}
+
+// jobModifyIndex safely extracts a job's ModifyIndex.
+func jobModifyIndex(j *nomadapi.Job) uint64 {
+	if j == nil || j.JobModifyIndex == nil {
+		return 0
+	}
+	return *j.JobModifyIndex
+}
+
 // checkHCLCandidate applies final selection against the live Nomad job, then
-// runs Info + Plan to produce a diff. Returns (false, "", nil) when the job
-// should be skipped; returns (true, reason, nil) when selected but no diff was
-// found; returns (true, reason, &diff) when a diff was detected.
-func (d *Differ) checkHCLCandidate(jobID string, entry hclEntry, q *nomadapi.QueryOptions, wq *nomadapi.WriteOptions) (bool, SelectionReason, *JobDiff) {
+// runs Info + Plan to produce a diff. Returns (false, "", nil, nil) when the
+// job should be skipped; (true, reason, nil, nil) when selected but no diff
+// was found; (true, reason, &diff, cand) when a diff was detected. cand is
+// non-nil only when the diff is actionable (a REGISTER could resolve it).
+func (d *Differ) checkHCLCandidate(jobID string, entry hclEntry, q *nomadapi.QueryOptions, wq *nomadapi.WriteOptions) (bool, SelectionReason, *JobDiff, *updateCandidate) {
 	nomadJob, _, infoErr := d.jobs.Info(jobID, q)
 	notFound := infoErr != nil && isNotFound(infoErr)
 
@@ -346,33 +419,47 @@ func (d *Differ) checkHCLCandidate(jobID string, entry hclEntry, q *nomadapi.Que
 	if !selected {
 		slog.Debug("Skipping HCL job: managed meta key absent from live Nomad job", "job", jobID)
 		d.jobsSkippedBySel.WithLabelValues("hcl").Inc()
-		return false, "", nil
+		return false, "", nil, nil
 	}
 
 	if notFound {
-		return true, reason, &JobDiff{
+		diff := &JobDiff{
 			JobID:    jobID,
 			HCLFile:  entry.file,
 			DiffType: DiffTypeMissingFromNomad,
 			Detail:   "job is defined in HCL but not registered in Nomad",
 		}
+		// ModifyIndex 0 with EnforceIndex means "job must not exist", which
+		// is exactly the guard a first registration wants.
+		cand := &updateCandidate{
+			jobID: jobID, hclFile: entry.file, job: entry.job,
+			modifyIndex: 0, class: DiffClassOther, isCreation: true,
+		}
+		return true, reason, diff, cand
 	}
 	if infoErr != nil {
 		d.nomadAPIErrors.WithLabelValues("info").Inc()
 		slog.Warn("Failed to query job from Nomad", "job", jobID, "err", infoErr)
-		return true, reason, nil
+		return true, reason, nil, nil
 	}
 
 	// Unless the caller explicitly wants dead jobs included, treat a dead
 	// job the same as a missing one.
 	if !d.includeDeadJobs && nomadJob != nil && nomadJob.Status != nil && *nomadJob.Status == "dead" {
 		slog.Debug("Job is dead in Nomad, treating as missing", "job", jobID)
-		return true, reason, &JobDiff{
+		diff := &JobDiff{
 			JobID:    jobID,
 			HCLFile:  entry.file,
 			DiffType: DiffTypeMissingFromNomad,
 			Detail:   "job is defined in HCL but is in 'dead' state in Nomad",
 		}
+		// The dead job still exists in Nomad's state store, so the CAS
+		// token is its current ModifyIndex, not 0.
+		cand := &updateCandidate{
+			jobID: jobID, hclFile: entry.file, job: entry.job,
+			modifyIndex: jobModifyIndex(nomadJob), class: DiffClassOther, isCreation: true,
+		}
+		return true, reason, diff, cand
 	}
 
 	// Job exists and is live — run a plan to detect config drift.
@@ -387,7 +474,7 @@ func (d *Differ) checkHCLCandidate(jobID string, entry hclEntry, q *nomadapi.Que
 	if err != nil {
 		d.nomadAPIErrors.WithLabelValues("plan").Inc()
 		slog.Warn("Failed to plan job", "job", jobID, "err", err)
-		return true, reason, nil
+		return true, reason, nil, nil
 	}
 
 	if plan.Diff != nil && plan.Diff.Type != "" && plan.Diff.Type != "None" {
@@ -396,8 +483,12 @@ func (d *Differ) checkHCLCandidate(jobID string, entry hclEntry, q *nomadapi.Que
 		// those out so we don't report spurious drift.
 		isDead := nomadJob != nil && nomadJob.Status != nil && *nomadJob.Status == "dead"
 		if isDead && !hasContentDiff(plan.Diff) {
-			return true, reason, nil
+			return true, reason, nil, nil
 		}
+		// Classify before redaction; classification reads only structure
+		// (names and change types), but doing it first keeps the order
+		// obviously safe.
+		class := classifyDiff(plan.Diff, autoscaledGroups(entry.job))
 		// Redact before the diff is stored so potentially sensitive values
 		// never reach /diffs or any other consumer of the stored state.
 		if d.redactSecrets {
@@ -405,15 +496,20 @@ func (d *Differ) checkHCLCandidate(jobID string, entry hclEntry, q *nomadapi.Que
 				d.redactedFields.Add(float64(n))
 			}
 		}
-		return true, reason, &JobDiff{
+		diff := &JobDiff{
 			JobID:    jobID,
 			HCLFile:  entry.file,
 			DiffType: DiffTypeModified,
 			Detail:   fmt.Sprintf("Nomad plan shows diff type %q", plan.Diff.Type),
 			PlanDiff: plan.Diff,
 		}
+		cand := &updateCandidate{
+			jobID: jobID, hclFile: entry.file, job: entry.job,
+			modifyIndex: jobModifyIndex(nomadJob), class: class,
+		}
+		return true, reason, diff, cand
 	}
-	return true, reason, nil
+	return true, reason, nil, nil
 }
 
 // commitResults stores the computed diffs and updates drift tracking and metrics.
@@ -518,9 +614,10 @@ func (d *Differ) Check(hclFiles map[string]string, commit string) error {
 	hclJobSet := make(map[string]struct{}, len(hclEntries))
 	selReasons := make(map[string]SelectionReason)
 	var diffs []JobDiff
+	var candidates []*updateCandidate
 
 	for jobID, entry := range hclEntries {
-		selected, reason, diff := d.checkHCLCandidate(jobID, entry, q, wq)
+		selected, reason, diff, cand := d.checkHCLCandidate(jobID, entry, q, wq)
 		if !selected {
 			continue
 		}
@@ -528,6 +625,9 @@ func (d *Differ) Check(hclFiles map[string]string, commit string) error {
 		hclJobSet[jobID] = struct{}{}
 		if diff != nil {
 			diffs = append(diffs, *diff)
+		}
+		if cand != nil {
+			candidates = append(candidates, cand)
 		}
 	}
 
@@ -556,8 +656,93 @@ func (d *Differ) Check(hclFiles map[string]string, commit string) error {
 	}
 
 	d.commitResults(diffs, selReasons, commit, listMeta, time.Now())
-	slog.Info("Diff check complete", "diffs", len(diffs), "commit", commit)
+
+	var raftIndex uint64
+	if listMeta != nil {
+		raftIndex = listMeta.LastIndex
+	}
+	enqueued := 0
+	for _, cand := range candidates {
+		if d.maybeEnqueueUpdate(cand, commit, raftIndex) {
+			enqueued++
+		}
+	}
+	if enqueued > 0 {
+		d.notifyApplier()
+	}
+
+	slog.Info("Diff check complete", "diffs", len(diffs), "updates_enqueued", enqueued, "commit", commit)
 	return nil
+}
+
+// effectivePolicy resolves the update policy for a job: the HCL meta key
+// <prefix>_update_policy wins (Git is intent); otherwise the configured
+// default applies. An unrecognised meta value is treated as "none" — the
+// conservative reading — and logged.
+func (d *Differ) effectivePolicy(meta map[string]string) UpdatePolicy {
+	if d.managedMetaPrefix != "" {
+		if v, ok := meta[d.managedMetaPrefix+"_update_policy"]; ok {
+			if ValidUpdatePolicy(v) {
+				return UpdatePolicy(v)
+			}
+			slog.Warn("Unrecognised update policy in job meta; treating as none",
+				"key", d.managedMetaPrefix+"_update_policy", "value", v)
+			return UpdatePolicyNone
+		}
+	}
+	return d.defaultPolicy
+}
+
+// maybeEnqueueUpdate applies the policy and creation gates to a candidate
+// and enqueues a JobUpdate if it passes. Reports whether an update was
+// enqueued.
+func (d *Differ) maybeEnqueueUpdate(c *updateCandidate, commit string, raftIndex uint64) bool {
+	if c.class == DiffClassNone && !c.isCreation {
+		// Everything in the diff is autoscaler-owned Count/Scaling churn;
+		// Git has nothing to apply. The diff stays visible as an observation.
+		return false
+	}
+
+	policy := d.effectivePolicy(c.job.Meta)
+	switch policy {
+	case UpdatePolicyNone:
+		d.updatesBlockedByPolicy.WithLabelValues(c.jobID, string(policy)).Inc()
+		return false
+	case UpdatePolicyImageOnly:
+		// Initial registration is full-only by design: registering a job
+		// for the first time is not an image-only change.
+		if c.isCreation || c.class != DiffClassImageOnly {
+			d.updatesBlockedByPolicy.WithLabelValues(c.jobID, string(policy)).Inc()
+			return false
+		}
+	}
+
+	if c.isCreation && !d.enableJobCreation {
+		slog.Info("Job creation blocked: --enable-job-creation is off", "job", c.jobID)
+		d.updatesBlockedCreationDisabled.WithLabelValues(c.jobID).Inc()
+		return false
+	}
+
+	superseded := d.updateQueue.Enqueue(JobUpdate{
+		UpdateID:            updateID(c.jobID, commit),
+		JobID:               c.jobID,
+		HCLFile:             c.hclFile,
+		GitCommit:           commit,
+		Operation:           JobUpdateOperationRegister,
+		Status:              JobUpdateStatusPending,
+		Policy:              policy,
+		NomadJobModifyIndex: c.modifyIndex,
+		NomadRaftIndex:      raftIndex,
+		DetectedAt:          time.Now().UTC().Format(time.RFC3339),
+		job:                 c.job,
+		preserveCounts:      len(autoscaledGroups(c.job)) > 0,
+	})
+	if superseded > 0 {
+		d.jobUpdatesTotal.WithLabelValues(string(JobUpdateOperationRegister), string(JobUpdateStatusSuperseded)).Add(float64(superseded))
+	}
+	d.pendingUpdates.Set(float64(d.updateQueue.PendingCount()))
+	slog.Info("Enqueued job update", "job", c.jobID, "update_id", updateID(c.jobID, commit), "policy", policy, "creation", c.isCreation)
+	return true
 }
 
 // ForceCheck runs a diff check unconditionally because the Nomad state has

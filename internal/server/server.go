@@ -26,6 +26,8 @@ import (
 type DiffSource interface {
 	Diffs() ([]nomad.JobDiff, time.Time, string)
 	SelectedJobs() ([]nomad.SelectedJob, time.Time, string)
+	// Updates returns a snapshot of the GitOps update queue.
+	Updates() []nomad.JobUpdate
 	// Ready reports whether at least one diff check has completed.
 	Ready() bool
 }
@@ -118,6 +120,7 @@ func NewWithRegistry(cfg *config.Config, diffs DiffSource, git GitStatusSource, 
 		apiMux := http.NewServeMux()
 		apiMux.HandleFunc("GET /api/v1/diffs", s.handleAPIDiffs)
 		apiMux.HandleFunc("GET /api/v1/selected-jobs", s.handleAPISelectedJobs)
+		apiMux.HandleFunc("GET /api/v1/updates", s.handleAPIUpdates)
 		apiMux.HandleFunc("GET /api/v1/status", s.handleAPIStatus)
 		apiMux.HandleFunc("GET /api/v1/version", s.handleAPIVersion)
 		apiMux.HandleFunc("POST /api/v1/refresh", s.handleAPIRefresh)

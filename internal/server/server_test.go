@@ -25,6 +25,7 @@ import (
 type mockDiffSource struct {
 	diffs        []nomad.JobDiff
 	selectedJobs []nomad.SelectedJob
+	updates      []nomad.JobUpdate
 	lastCheck    time.Time
 	lastCommit   string
 }
@@ -36,6 +37,8 @@ func (m *mockDiffSource) Diffs() ([]nomad.JobDiff, time.Time, string) {
 func (m *mockDiffSource) SelectedJobs() ([]nomad.SelectedJob, time.Time, string) {
 	return m.selectedJobs, m.lastCheck, m.lastCommit
 }
+
+func (m *mockDiffSource) Updates() []nomad.JobUpdate { return m.updates }
 
 func (m *mockDiffSource) Ready() bool { return !m.lastCheck.IsZero() }
 
@@ -1017,5 +1020,101 @@ func TestFmtTime_NonZeroReturnsRFC3339(t *testing.T) {
 	got := server.FmtTime(ts)
 	if got != "2026-01-15T12:00:00Z" {
 		t.Errorf("want RFC3339 UTC, got %q", got)
+	}
+}
+
+// ── /api/v1/updates ───────────────────────────────────────────────────────────
+
+func TestAPIUpdates_RequiresAuth(t *testing.T) {
+	cfg := &config.Config{ListenAddr: ":0", WebhookPath: "/webhook", Branch: "main", APIKey: "k-" + strings.Repeat("x", 16)}
+	srv := server.NewWithRegistry(cfg, &mockDiffSource{lastCheck: time.Now()}, &mockGitSource{lastUpdate: time.Now()},
+		server.BuildInfo{Version: "test"}, prometheus.NewRegistry())
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/updates", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("no key: want 401, got %d", rec.Code)
+	}
+}
+
+func TestAPIUpdates_ReturnsQueue(t *testing.T) {
+	key := "k-" + strings.Repeat("x", 16)
+	cfg := &config.Config{ListenAddr: ":0", WebhookPath: "/webhook", Branch: "main", APIKey: key}
+	diffSrc := &mockDiffSource{
+		lastCheck: time.Now(),
+		updates: []nomad.JobUpdate{
+			{
+				UpdateID:            "myapp/abc1234",
+				JobID:               "myapp",
+				HCLFile:             "myapp.hcl",
+				GitCommit:           "abc1234def",
+				Operation:           nomad.JobUpdateOperationRegister,
+				Status:              nomad.JobUpdateStatusSucceeded,
+				Policy:              nomad.UpdatePolicyFull,
+				NomadJobModifyIndex: 43,
+			},
+		},
+	}
+	srv := server.NewWithRegistry(cfg, diffSrc, &mockGitSource{lastUpdate: time.Now()},
+		server.BuildInfo{Version: "test"}, prometheus.NewRegistry())
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/updates", nil)
+	req.Header.Set("Authorization", "Bearer "+key)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp struct {
+		Updates []nomad.JobUpdate `json:"updates"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if len(resp.Updates) != 1 {
+		t.Fatalf("want 1 update, got %d", len(resp.Updates))
+	}
+	u := resp.Updates[0]
+	if u.UpdateID != "myapp/abc1234" || u.Operation != nomad.JobUpdateOperationRegister ||
+		u.Status != nomad.JobUpdateStatusSucceeded || u.Policy != nomad.UpdatePolicyFull {
+		t.Errorf("unexpected update payload: %+v", u)
+	}
+}
+
+func TestAPIUpdates_EmptyQueueIsEmptyArray(t *testing.T) {
+	key := "k-" + strings.Repeat("x", 16)
+	cfg := &config.Config{ListenAddr: ":0", WebhookPath: "/webhook", Branch: "main", APIKey: key}
+	srv := server.NewWithRegistry(cfg, &mockDiffSource{lastCheck: time.Now()}, &mockGitSource{lastUpdate: time.Now()},
+		server.BuildInfo{Version: "test"}, prometheus.NewRegistry())
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/updates", nil)
+	req.Header.Set("Authorization", "Bearer "+key)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), `"updates":[]`) {
+		t.Errorf("empty queue should serialise as [], got %s", rec.Body.String())
+	}
+}
+
+func TestAPISpec_IncludesUpdates(t *testing.T) {
+	cfg := &config.Config{ListenAddr: ":0", WebhookPath: "/webhook", Branch: "main", APIKey: "k-" + strings.Repeat("x", 16)}
+	srv := server.NewWithRegistry(cfg, &mockDiffSource{lastCheck: time.Now()}, &mockGitSource{lastUpdate: time.Now()},
+		server.BuildInfo{Version: "test"}, prometheus.NewRegistry())
+
+	req := httptest.NewRequest(http.MethodGet, "/api/openapi.json", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	for _, want := range []string{`"/updates"`, `"JobUpdate"`, "SUPERSEDED"} {
+		if !strings.Contains(rec.Body.String(), want) {
+			t.Errorf("OpenAPI spec missing %s", want)
+		}
 	}
 }

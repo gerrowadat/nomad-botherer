@@ -20,3 +20,18 @@ func HasContentDiff(d *nomadapi.JobDiff) bool {
 func RedactedFieldsCounter(d *Differ) prometheus.Counter {
 	return d.redactedFields
 }
+
+// DrainUpdates runs the applier synchronously over all pending updates.
+func DrainUpdates(d *Differ) { d.drainUpdates() }
+
+// ClassifyDiff exposes the diff classifier for table-driven tests.
+func ClassifyDiff(d *nomadapi.JobDiff, autoscaled map[string]bool) DiffClass {
+	return classifyDiff(d, autoscaled)
+}
+
+// LastNomadIndex exposes the cached Raft index for skip-invalidation tests.
+func LastNomadIndex(d *Differ) uint64 {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.lastNomadIndex
+}

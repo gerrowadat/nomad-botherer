@@ -28,6 +28,7 @@ Three kinds of drift are tracked:
 - [Quick start](#quick-start)
 - [Configuration](#configuration)
 - [Webhooks](#webhooks)
+- [Applying changes (GitOps mode)](#applying-changes-gitops-mode)
 - [JSON API](#json-api)
   - [Authentication](#authentication)
   - [Endpoints](#endpoints)
@@ -305,6 +306,9 @@ Every flag has a corresponding environment variable. Environment variables are r
 | `--diff-interval` | `DIFF_INTERVAL` | `1m` | Periodic Nomad-side drift check interval |
 | `--include-dead-jobs` | `INCLUDE_DEAD_JOBS` | `false` | Treat dead Nomad jobs like running ones (by default dead jobs count as missing) |
 | `--redact-secrets` | `REDACT_SECRETS` | `true` | Redact potentially sensitive plan-diff values before they are stored or rendered. Env vars, template bodies, and fields with secret-like names (`password`, `token`, `secret`, ...) are shown as `[REDACTED]`; the diff structure and field names are kept. Set to `false` to show real values. |
+| `--default-update-policy` | `DEFAULT_UPDATE_POLICY` | `none` | Update policy for managed jobs without an explicit `<prefix>_update_policy` meta key: `none` (detect only), `image-only`, or `full`. See [Applying changes](#applying-changes-gitops-mode). |
+| `--enable-job-creation` | `ENABLE_JOB_CREATION` | `false` | Allow first-time registration of jobs that exist in Git but not in Nomad. Requires an effective policy of `full` for the job. |
+| `--apply-interval` | `APPLY_INTERVAL` | `10s` | Fallback cadence of the apply loop; enqueued updates are also applied immediately. |
 | `--job-selector-glob` | `JOB_SELECTOR_GLOB` | *(empty — no glob)* | Glob pattern selecting jobs to watch by name (e.g. `myprefix-*`, `*` for all). Combined with `--managed-meta-prefix` as a union. |
 | `--managed-meta-prefix` | `MANAGED_META_PREFIX` | `gitops` | Prefix for job meta keys used by nomad-botherer. With prefix `gitops`, the key `gitops_managed = "true"` opts a job in. Empty disables meta-based selection. |
 | `--managed-meta-hcl-canonical` | `MANAGED_META_HCL_CANONICAL` | `false` | When false (default), the live Nomad job's meta is the source of truth for managed-meta-prefix selection. When true, the HCL file is sufficient to opt a job in even if the running job does not carry the key. |
@@ -337,6 +341,75 @@ Webhook request bodies are capped at 25 MB (GitHub's own payload limit); larger 
 
 ---
 
+## Applying changes (GitOps mode)
+
+By default nomad-botherer only *detects* drift. It can also *apply* it —
+re-registering jobs from their HCL when Git and Nomad disagree — but every
+write is opt-in twice over: the default update policy is `none`, and
+first-time registration needs its own flag on top.
+
+### Update policies
+
+Each managed job has an effective update policy, resolved as: the job's HCL
+meta key wins; otherwise `--default-update-policy` applies.
+
+```hcl
+job "api-server" {
+  meta {
+    gitops_managed       = "true"
+    gitops_update_policy = "image-only"
+  }
+}
+```
+
+| Policy | Behaviour |
+|---|---|
+| `none` | Drift is detected and surfaced (diffs, API, metrics) but never applied. The default. |
+| `image-only` | Drift is applied only when the *entire* plan diff is confined to Docker image references. Any other change — even bundled in the same commit as an image bump — leaves the whole update unapplied and surfaced as a diff. |
+| `full` | Any detected drift between HCL and the cluster is applied. |
+
+An unrecognised policy value in job meta is treated as `none` and logged.
+The meta key name follows `--managed-meta-prefix`: with the default prefix
+the key is `gitops_update_policy`.
+
+### What gets applied, and how
+
+| Drift type | Action |
+|---|---|
+| `modified` | Re-register the job from HCL — if the policy allows the change. |
+| `missing_from_nomad` | Register the job for the first time — only with `--enable-job-creation` *and* an effective policy of `full` (a first registration is never an image-only change). Dead jobs count as missing here. |
+| `missing_from_hcl` | Never applied. Deregistration is deliberately not implemented; it stays an observation. |
+
+Every apply is conservative by construction:
+
+- **Plan first.** A job is never registered without a fresh `Jobs.Plan()`; if
+  the plan shows nothing left to apply, the update completes as a no-op.
+- **CAS on every write.** `Jobs.Register()` runs with `EnforceIndex` and the
+  `JobModifyIndex` captured at detection time. If the job changed in Nomad
+  between detection and apply, the write is rejected, the update is marked
+  `FAILED`, and the next diff cycle re-detects with current state. For new
+  jobs the index is 0, which Nomad reads as "must not already exist".
+- **The autoscaler owns Count.** Task groups with a scaling policy register
+  with `PreserveCounts`, and Count/Scaling changes on those groups neither
+  trigger nor block an update.
+
+Detection and application are decoupled: diffs land in an in-memory update
+queue drained by a separate apply loop, so a slow or failing apply never
+delays the next check. If a newer commit arrives before an older update is
+applied, the older update is marked `SUPERSEDED` — the most recent intended
+state wins. The queue is deliberately not persisted: after a restart the next
+diff cycle rebuilds it from Git and Nomad, which together hold all durable
+truth. The queue is visible at `GET /api/v1/updates`.
+
+Each update carries a stable ID (`<job_id>/<short_commit>`), the operation,
+status (`PENDING`, `IN_PROGRESS`, `SUCCEEDED`, `FAILED`, `SUPERSEDED`), the
+policy that allowed it, and the CAS token used.
+
+The design background is in `docs/proposals/gitops-job-updates.md` and
+`docs/proposals/update-policies.md`.
+
+---
+
 ## JSON API
 
 The JSON API is served on the same HTTP port as the web console (`--listen-addr`, default `:8080`). It is disabled by default; set `--api-key` / `API_KEY` to enable it.
@@ -359,6 +432,7 @@ The OpenAPI 3.0 specification is served at `GET /api/openapi.json` without authe
 |--------|------|---------|-------|
 | GET | `/api/v1/diffs` | Current job diffs + last check time + last commit | 503 until startup completes |
 | GET | `/api/v1/selected-jobs` | Jobs matched by selection criteria + reason each matched | 503 until startup completes |
+| GET | `/api/v1/updates` | GitOps update queue: pending, in-progress, and recent updates | Always available |
 | GET | `/api/v1/status` | Git watcher status (last commit, last fetch time) | 503 until git clone completes |
 | GET | `/api/v1/version` | Build version, commit hash, build date | Always available |
 | POST | `/api/v1/refresh` | `{"message":"refresh triggered"}` | Triggers immediate git pull |
@@ -472,6 +546,10 @@ These counters and timestamps describe the diff check loop itself — how often 
 | `nomad_botherer_hcl_parse_errors_total` | Counter | — | HCL files that failed to parse via the Nomad API. These files are skipped; the rest of the check continues. |
 | `nomad_botherer_hcl_non_job_files_skipped_total` | Counter | — | HCL files that were skipped because they contain no `job` stanza (e.g. ACL policies, volumes). Expected and normal; a rising rate may indicate `--hcl-dir` is set too broadly. |
 | `nomad_botherer_diff_fields_redacted_total` | Counter | — | Plan-diff field values replaced with `[REDACTED]` before storage (only when `--redact-secrets` is on). A rising count means drifted jobs have changes in env vars, templates, or secret-like fields. |
+| `nomad_botherer_updates_blocked_by_policy_total` | Counter | `job`, `policy` | Diffs that would have produced a JobUpdate but were filtered out by the effective update policy. Watch this to find jobs accumulating unapplied drift. |
+| `nomad_botherer_updates_blocked_creation_disabled_total` | Counter | `job` | First-time registrations blocked because `--enable-job-creation` is off. |
+| `nomad_botherer_job_updates_total` | Counter | `operation`, `status` | JobUpdates reaching a terminal state (`SUCCEEDED`, `FAILED`, `SUPERSEDED`). |
+| `nomad_botherer_job_updates_pending` | Gauge | — | Updates currently waiting to be applied. |
 
 #### Git tracking
 

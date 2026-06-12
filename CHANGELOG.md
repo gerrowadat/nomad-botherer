@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+### New features
+
+- **GitOps apply: nomad-botherer can now mutate jobs.** When drift is
+  detected for a managed job, it can re-register the job from its HCL —
+  implementing the async-queue design from
+  `docs/proposals/gitops-job-updates.md` and the policy model from
+  `docs/proposals/update-policies.md`. Everything defaults to
+  detection-only:
+  - Per-job update policies: `none` (default), `image-only` (apply only
+    when the entire plan diff is Docker image fields), `full`. Set the
+    default with `--default-update-policy` / `DEFAULT_UPDATE_POLICY`;
+    override per job with the `gitops_update_policy` meta key in HCL.
+  - First-time registration of jobs missing from Nomad is additionally
+    gated on `--enable-job-creation` / `ENABLE_JOB_CREATION` (default off)
+    and requires policy `full`.
+  - Every write is plan-first and CAS-protected (`EnforceIndex` with the
+    `JobModifyIndex` captured at detection); conflicts mark the update
+    `FAILED` and the next cycle re-detects. Autoscaled groups register
+    with `PreserveCounts`, and autoscaler-owned Count/Scaling churn never
+    triggers an update.
+  - Updates flow through an in-memory queue drained by a separate apply
+    loop (`--apply-interval` fallback cadence); newer commits supersede
+    pending updates for the same job. The queue is visible at
+    `GET /api/v1/updates` and in four new metrics
+    (`nomad_botherer_job_updates_total`, `..._job_updates_pending`,
+    `..._updates_blocked_by_policy_total`,
+    `..._updates_blocked_creation_disabled_total`).
+  - Deregistration (`missing_from_hcl`) remains observation-only.
+
 ### Changed
 
 - **Test coverage raised from 78% to 88% of statements.** `internal/config`

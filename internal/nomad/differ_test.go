@@ -21,6 +21,7 @@ type mockJobsClient struct {
 	planFn     func(job *nomadapi.Job, diff bool, q *nomadapi.WriteOptions) (*nomadapi.JobPlanResponse, *nomadapi.WriteMeta, error)
 	infoFn     func(jobID string, q *nomadapi.QueryOptions) (*nomadapi.Job, *nomadapi.QueryMeta, error)
 	listFn     func(q *nomadapi.QueryOptions) ([]*nomadapi.JobListStub, *nomadapi.QueryMeta, error)
+	registerFn func(job *nomadapi.Job, opts *nomadapi.RegisterOptions, q *nomadapi.WriteOptions) (*nomadapi.JobRegisterResponse, *nomadapi.WriteMeta, error)
 }
 
 func (m *mockJobsClient) ParseHCL(jobHCL string, normalize bool) (*nomadapi.Job, error) {
@@ -34,6 +35,12 @@ func (m *mockJobsClient) Info(jobID string, q *nomadapi.QueryOptions) (*nomadapi
 }
 func (m *mockJobsClient) List(q *nomadapi.QueryOptions) ([]*nomadapi.JobListStub, *nomadapi.QueryMeta, error) {
 	return m.listFn(q)
+}
+func (m *mockJobsClient) RegisterOpts(job *nomadapi.Job, opts *nomadapi.RegisterOptions, q *nomadapi.WriteOptions) (*nomadapi.JobRegisterResponse, *nomadapi.WriteMeta, error) {
+	if m.registerFn == nil {
+		return &nomadapi.JobRegisterResponse{}, nil, nil
+	}
+	return m.registerFn(job, opts, q)
 }
 
 // defaultMock returns a client where everything succeeds with no diffs.
