@@ -30,6 +30,10 @@
     `..._updates_blocked_by_policy_total`,
     `..._updates_blocked_creation_disabled_total`).
   - Deregistration (`missing_from_hcl`) remains observation-only.
+  - The web console index shows the apply mode (default policy, job
+    creation flag, pending update count), and the regression suite gains
+    end-to-end apply scenarios against a real cluster, including the
+    negative test that the defaults never write.
 
 ### Changed
 

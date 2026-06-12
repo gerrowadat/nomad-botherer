@@ -1118,3 +1118,57 @@ func TestAPISpec_IncludesUpdates(t *testing.T) {
 		}
 	}
 }
+
+// ── / (index) apply mode ──────────────────────────────────────────────────────
+
+func TestIndex_ApplyMode_Defaults(t *testing.T) {
+	srv, _ := newTestServer(t, nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+	if !strings.Contains(body, "Apply mode: default policy <code>none</code>") {
+		t.Errorf("index should show the default policy, got:\n%.500s", body)
+	}
+	if !strings.Contains(body, "job creation disabled") {
+		t.Error("index should show job creation disabled by default")
+	}
+	if strings.Contains(body, "pending") {
+		t.Error("no pending-updates note expected with an empty queue")
+	}
+}
+
+func TestIndex_ApplyMode_EnabledWithPending(t *testing.T) {
+	cfg := &config.Config{
+		ListenAddr:          ":0",
+		WebhookPath:         "/webhook",
+		Branch:              "main",
+		DefaultUpdatePolicy: "full",
+		EnableJobCreation:   true,
+	}
+	diffSrc := &mockDiffSource{
+		lastCheck: time.Now(),
+		updates: []nomad.JobUpdate{
+			{UpdateID: "a/1234567", JobID: "a", Status: nomad.JobUpdateStatusPending},
+			{UpdateID: "b/1234567", JobID: "b", Status: nomad.JobUpdateStatusSucceeded},
+		},
+	}
+	srv := server.NewWithRegistry(cfg, diffSrc, &mockGitSource{lastUpdate: time.Now()},
+		server.BuildInfo{Version: "test"}, prometheus.NewRegistry())
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+	if !strings.Contains(body, "default policy <code>full</code>") {
+		t.Errorf("index should show policy full, got:\n%.500s", body)
+	}
+	if !strings.Contains(body, "job creation") || !strings.Contains(body, "enabled") {
+		t.Error("index should show job creation enabled")
+	}
+	if !strings.Contains(body, "1 update(s) pending") {
+		t.Errorf("index should count only non-terminal updates as pending, got:\n%.500s", body)
+	}
+}

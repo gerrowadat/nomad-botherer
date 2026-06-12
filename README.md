@@ -3,7 +3,7 @@
 [![Tests](https://github.com/gerrowadat/nomad-botherer/actions/workflows/test.yml/badge.svg)](https://github.com/gerrowadat/nomad-botherer/actions/workflows/test.yml)
 [![Coverage](https://raw.githubusercontent.com/wiki/gerrowadat/nomad-botherer/coverage.svg)](https://raw.githack.com/wiki/gerrowadat/nomad-botherer/coverage.html)
 
-Watches a remote git repo for Nomad job HCL definitions and continuously compares them against a live Nomad cluster. When drift is detected it logs, exposes Prometheus metrics, and reports details on `/healthz`.
+Watches a remote git repo for Nomad job HCL definitions and continuously compares them against a live Nomad cluster. When drift is detected it logs, exposes Prometheus metrics, and reports details on `/healthz` — and, when explicitly enabled per job or per deployment, applies the change by re-registering the job from its HCL (see [Applying changes](#applying-changes-gitops-mode)). Out of the box it never writes anything.
 
 Three kinds of drift are tracked:
 
@@ -129,16 +129,20 @@ watched. See [Job selection](#job-selection) for details.
 
 ## Design and prior art
 
-nomad-botherer is currently a **drift detector only** — it observes and reports
-differences between Git and a live Nomad cluster but does not apply changes.
-Job application (GitOps-style reconciliation) is planned but not yet implemented.
+nomad-botherer is a **drift detector first and a GitOps operator second**: it
+always observes and reports differences between Git and a live Nomad cluster,
+and applies them only where the per-job update policy and deployment flags
+say so. The detection-only default is deliberate — turning on reconciliation
+is an explicit, per-job-overridable decision, not a side effect of running
+the tool.
 
 [`docs/prior-art.md`](docs/prior-art.md) surveys the existing Nomad GitOps
-tooling (nomad-gitops-operator, nomad-ops, Levant, Waypoint), explains what each
-does and where each falls short, and describes the design decisions that will
-guide the apply side of nomad-botherer when it is built.
+tooling (nomad-gitops-operator, nomad-ops, Levant, Waypoint), explains what
+each does and where each falls short, and describes the design decisions
+behind nomad-botherer's apply side: plan before every write, CAS on every
+register, opt-in scope, and never writing to Git.
 
-The design proposals for job application and change checkpointing are in
+The design proposals that shaped the implementation are in
 [`docs/proposals/`](docs/proposals/).
 
 ---
@@ -155,7 +159,8 @@ The design proposals for job application and change checkpointing are in
 
    Dead jobs are excluded from both checks by default because a stopped job is expected state — it was intentionally halted. Pass `--include-dead-jobs` to treat dead jobs like running ones.
 6. Results are stored in memory and exposed via `/healthz` (JSON), `/metrics` (Prometheus), and the authenticated JSON API (`/api/v1/`).
-7. The repo is re-checked on every `--poll-interval` (git fetch), on every `--diff-interval` (Nomad-side drift), and immediately on a webhook push event or a `POST /api/v1/refresh` call. When `--max-git-staleness` or `--max-nomad-staleness` is set, a dedicated background goroutine for each forces a refresh if the respective source has not been updated within the configured window — useful when webhooks are unreliable or paused. The two timers are independent and can be set or disabled individually.
+7. Each actionable diff is checked against the job's effective **update policy** (HCL meta key, falling back to `--default-update-policy`, default `none`). Diffs the policy allows become entries in the update queue, and a separate apply loop re-registers those jobs from HCL — plan-first and CAS-protected. With the defaults nothing is ever applied. See [Applying changes](#applying-changes-gitops-mode).
+8. The repo is re-checked on every `--poll-interval` (git fetch), on every `--diff-interval` (Nomad-side drift), and immediately on a webhook push event or a `POST /api/v1/refresh` call. When `--max-git-staleness` or `--max-nomad-staleness` is set, a dedicated background goroutine for each forces a refresh if the respective source has not been updated within the configured window — useful when webhooks are unreliable or paused. The two timers are independent and can be set or disabled individually.
 
 ---
 
@@ -751,6 +756,7 @@ calls. They are reliable against the isolated Docker-managed cluster.
 | `metrics_test.go` | All expected metric names registered at construction; gauge values match observed drift; skip counter; first-seen timestamps (set, stable, cleared); parse-error and non-job-skip counters |
 | `security_test.go` | Webhook HMAC-SHA256 (valid, invalid, missing, wrong algorithm, large body, concurrent flood, no-secret mode); JSON API auth (missing, wrong, correct key; 100-concurrent load); path-traversal job IDs; very large HCL files; HTML XSS escaping in the index page |
 | `e2e_test.go` | Binary lifecycle (503→200 on startup); drift detected over HTTP and `/diffs`; webhook triggers refresh without waiting for next poll interval; JSON API (`/api/v1/diffs`, `/api/v1/status`, `/api/v1/selected-jobs`, `/api/v1/version`, `POST /api/v1/refresh`, `/api/openapi.json`); `/metrics` endpoint content |
+| `apply_test.go` | GitOps apply, end to end with the real binary: drifted job converges when the HCL meta declares policy `full`; converges via `--default-update-policy=full`; **never writes under the default policy** (the critical negative test); job creation blocked without `--enable-job-creation` and performed with it; `image-only` policy blocks a non-image change; `/api/v1/updates` shows the `SUCCEEDED` record with its CAS token |
 
 #### Nomad version compatibility
 

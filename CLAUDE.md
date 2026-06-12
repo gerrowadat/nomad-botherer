@@ -35,22 +35,32 @@ internal/server/        HTTP: /, /healthz, /diffs, /metrics, /webhook
 
 ## Design intent
 
-### What nomad-botherer is and where it is going
+### What nomad-botherer is
 
-nomad-botherer is currently a **drift detector**: it watches a Git repo and a
-Nomad cluster and reports when they disagree. It does not apply changes.
+nomad-botherer is a **drift detector and GitOps operator**: it watches a Git
+repo and a Nomad cluster, reports when they disagree, and — where the per-job
+update policy and deployment flags allow — applies the Git state to Nomad by
+re-registering the job from HCL. The register path (`modified` and
+`missing_from_nomad`) is implemented; deregistration is not (see
+"Conservative deletion" below).
 
-The intended next phase is **GitOps application**: when drift is detected,
-nomad-botherer applies the Git state to Nomad. The design proposals in
-`docs/proposals/` cover this in detail. `docs/prior-art.md` surveys the
+**Applying is opt-in twice over and that is load-bearing.**
+`--default-update-policy` defaults to `none`, so a fresh deployment never
+writes; the `gitops_update_policy` meta key (`full` / `image-only` / `none`)
+overrides per job in either direction; and first-time registration
+additionally requires `--enable-job-creation` plus effective policy `full`.
+Do not weaken these defaults. Detection and application are decoupled
+(in-memory `UpdateQueue` drained by `Differ.RunApplier`); the queue is
+deliberately not persisted — Git and Nomad hold all durable truth and a
+restart costs one diff cycle.
+
+The design proposals in `docs/proposals/` record the reasoning; read them
+before extending the apply side (deregister, checkpointing, Diun
+integration all remain unimplemented). `docs/prior-art.md` surveys the
 existing tooling (nomad-gitops-operator, nomad-ops, Levant, Waypoint) and
-explains what problems they have that nomad-botherer is trying to avoid.
+explains the mistakes nomad-botherer deliberately avoids.
 
-Before implementing the apply side, read the proposal docs (job updates,
-checkpointing, update policies, Diun integration). The decisions in them were
-made deliberately and the reasoning matters.
-
-### Core design principles for the apply side
+### Core design principles for the apply side (implemented — preserve them)
 
 **Conservative by default.** Never register a job without running a plan first.
 Never register without a CAS token. The apply path is:
@@ -142,8 +152,8 @@ Use these terms consistently so the code and docs match:
 
 | Term | Meaning |
 |---|---|
-| `JobDiff` | An observation: detected drift between Git and Nomad. Already implemented. |
-| `JobUpdate` | An intended transition: a planned change to apply to Nomad. Not yet implemented. |
+| `JobDiff` | An observation: detected drift between Git and Nomad. |
+| `JobUpdate` | An intended transition: a planned change to apply to Nomad. Lives in the in-memory `UpdateQueue`; visible at `GET /api/v1/updates`. |
 | `JobUpdateOperation` | `REGISTER` or `DEREGISTER` |
 | `JobUpdateStatus` | `PENDING`, `IN_PROGRESS`, `SUCCEEDED`, `FAILED`, `SUPERSEDED` |
 | opt-in key | `gitops_managed = "true"` in job HCL meta — scope selector, never written by the tool |
