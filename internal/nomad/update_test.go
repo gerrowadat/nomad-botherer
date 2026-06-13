@@ -135,6 +135,42 @@ func TestUpdateQueue_InProgressNotSuperseded(t *testing.T) {
 	}
 }
 
+// TestUpdateQueue_InProgressNotMutated guards the fix for the race Copilot
+// flagged: re-enqueuing the same UpdateID while it is IN_PROGRESS must not
+// touch its fields (the applier reads them without the lock) and must not
+// add a duplicate row.
+func TestUpdateQueue_InProgressNotMutated(t *testing.T) {
+	q := nomad.NewUpdateQueue()
+	u := pendingUpdate("a", "commit1")
+	u.NomadJobModifyIndex = 10
+	q.Enqueue(u)
+
+	inflight := q.NextPending() // PENDING -> IN_PROGRESS
+	if inflight.NomadJobModifyIndex != 10 {
+		t.Fatalf("precondition: want CAS token 10, got %d", inflight.NomadJobModifyIndex)
+	}
+
+	// Same UpdateID re-detected mid-apply, carrying a different CAS token.
+	u.NomadJobModifyIndex = 20
+	if superseded := q.Enqueue(u); superseded != 0 {
+		t.Errorf("re-enqueue of in-flight UpdateID should supersede nothing, got %d", superseded)
+	}
+
+	if inflight.NomadJobModifyIndex != 10 {
+		t.Errorf("in-flight update's CAS token was mutated to %d (race)", inflight.NomadJobModifyIndex)
+	}
+	snap := q.Snapshot()
+	count := 0
+	for _, s := range snap {
+		if s.UpdateID == inflight.UpdateID {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("in-flight UpdateID should appear once, got %d entries", count)
+	}
+}
+
 func TestUpdateQueue_PendingCount(t *testing.T) {
 	q := nomad.NewUpdateQueue()
 	if q.PendingCount() != 0 {

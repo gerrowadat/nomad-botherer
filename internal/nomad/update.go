@@ -132,17 +132,23 @@ func NewUpdateQueue() *UpdateQueue {
 	return &UpdateQueue{}
 }
 
-// Enqueue records an intended update. Rules:
-//   - A non-terminal update with the same UpdateID (same job, same commit) is
-//     refreshed in place rather than duplicated.
-//   - A terminal update with the same UpdateID is reset to PENDING — the same
+// Enqueue records an intended update. Rules, keyed on any existing entry with
+// the same UpdateID (same job, same commit):
+//   - PENDING: refreshed in place (CAS token, job pointer) rather than
+//     duplicated — it has not started, so mutating it is safe.
+//   - IN_PROGRESS: left strictly untouched and no new entry is added. The
+//     applier reads the update's fields (CAS token, job pointer,
+//     preserveCounts) without holding the queue lock, so mutating an
+//     in-flight update would race it and could make the apply use a
+//     different token or job than it started with. If that apply fails, the
+//     next diff cycle re-enqueues against the by-then terminal record.
+//   - terminal: dropped and replaced with a fresh PENDING entry — the same
 //     intent is being retried after a failure or a cluster-side change.
-//   - A PENDING update for the same job with a different UpdateID (a newer
-//     commit arrived before the old one applied) is marked SUPERSEDED; the
-//     most recent intended state wins.
 //
-// An IN_PROGRESS update for the same job is left alone: the apply already
-// started, and the next diff cycle re-detects anything it did not settle.
+// A PENDING update for the same job with a *different* UpdateID (a newer
+// commit arrived before the old one applied) is marked SUPERSEDED; the most
+// recent intended state wins. An IN_PROGRESS update for a different UpdateID
+// is also left alone for the same race reason.
 //
 // Returns the number of updates marked SUPERSEDED by this enqueue.
 func (q *UpdateQueue) Enqueue(u JobUpdate) (superseded int) {
@@ -150,13 +156,22 @@ func (q *UpdateQueue) Enqueue(u JobUpdate) (superseded int) {
 	defer q.mu.Unlock()
 
 	for _, existing := range q.updates {
-		if existing.UpdateID == u.UpdateID && !existing.Status.terminal() {
+		if existing.UpdateID != u.UpdateID {
+			continue
+		}
+		switch existing.Status {
+		case JobUpdateStatusPending:
 			existing.NomadJobModifyIndex = u.NomadJobModifyIndex
 			existing.NomadRaftIndex = u.NomadRaftIndex
 			existing.job = u.job
 			existing.preserveCounts = u.preserveCounts
 			return 0
+		case JobUpdateStatusInProgress:
+			// Being applied right now: do not touch it, do not duplicate it.
+			return 0
 		}
+		// Terminal: handled by the supersede + drop logic below.
+		break
 	}
 
 	for _, existing := range q.updates {
@@ -167,9 +182,10 @@ func (q *UpdateQueue) Enqueue(u JobUpdate) (superseded int) {
 	}
 
 	// Retry of the same intent: drop the old terminal record so the queue
-	// holds one row per UpdateID.
+	// holds one row per UpdateID. Only terminal records are removed; an
+	// IN_PROGRESS record with this UpdateID already returned above.
 	for i, existing := range q.updates {
-		if existing.UpdateID == u.UpdateID {
+		if existing.UpdateID == u.UpdateID && existing.Status.terminal() {
 			q.updates = append(q.updates[:i], q.updates[i+1:]...)
 			break
 		}
