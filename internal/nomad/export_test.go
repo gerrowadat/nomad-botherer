@@ -40,3 +40,8 @@ func LastNomadIndex(d *Differ) uint64 {
 func MetaKeyIssues(d *Differ) *prometheus.CounterVec {
 	return d.metaKeyIssues
 }
+
+// MetaKeyChanges exposes the meta-key change counter for metric assertions.
+func MetaKeyChanges(d *Differ) *prometheus.CounterVec {
+	return d.metaKeyChanges
+}

@@ -125,6 +125,11 @@ type Differ struct {
 	// metric is not deduped.
 	metaIssuesLogged sync.Map
 
+	// prevMeta holds the previous cycle's prefix-key snapshots per
+	// (source, job), used to notice and log meta-key transitions.
+	metaMu   sync.Mutex
+	prevMeta map[string]metaState
+
 	mu             sync.RWMutex
 	diffs          []JobDiff
 	selectedJobs   []SelectedJob
@@ -151,6 +156,7 @@ type Differ struct {
 	jobUpdatesTotal                *prometheus.CounterVec
 	pendingUpdates                 prometheus.Gauge
 	metaKeyIssues                  *prometheus.CounterVec
+	metaKeyChanges                 *prometheus.CounterVec
 }
 
 // newDifferBase constructs a Differ from config with metrics registered into reg.
@@ -247,6 +253,10 @@ func newDifferBase(jobs NomadJobsClient, cfg *config.Config, reg prometheus.Regi
 			Name: "nomad_botherer_meta_key_issues_total",
 			Help: "Job meta keys under the managed prefix that nomad-botherer cannot act on, by issue (unknown_key, invalid_value). Counted every check cycle the issue persists.",
 		}, []string{"job", "issue"}),
+		metaKeyChanges: f.NewCounterVec(prometheus.CounterOpts{
+			Name: "nomad_botherer_meta_key_changes_total",
+			Help: "Transitions of managed-prefix meta keys (added, removed, changed) noticed between check cycles, by source (hcl or nomad).",
+		}, []string{"job", "source"}),
 	}
 
 	// Pre-populate Vec metrics for all finite label values so they appear in
@@ -352,7 +362,8 @@ func (d *Differ) SelectedJobs() ([]SelectedJob, time.Time, string) {
 // parseHCLCandidates parses all HCL files and returns those that pass the
 // preliminary selection filter (glob match or managed meta key in HCL).
 // Final selection against live Nomad state is done later in checkHCLCandidate.
-func (d *Differ) parseHCLCandidates(hclFiles map[string]string) map[string]hclEntry {
+// metaSeen collects each parsed job's prefix-key snapshot for change tracking.
+func (d *Differ) parseHCLCandidates(hclFiles map[string]string, metaSeen map[string]metaState) map[string]hclEntry {
 	entries := make(map[string]hclEntry)
 	for filename, content := range hclFiles {
 		if !jobBlockRe.MatchString(content) {
@@ -376,6 +387,7 @@ func (d *Differ) parseHCLCandidates(hclFiles map[string]string) map[string]hclEn
 		// selection filter: a typo'd opt-in key is exactly what makes a job
 		// silently unselected.
 		d.validateManagedMeta(jobID, "hcl:"+filename, job.Meta)
+		recordMetaSeen(metaSeen, d, "hcl", jobID, job.Meta)
 
 		globSel := d.jobSelectorGlob != ""
 		if globSel {
@@ -623,7 +635,8 @@ func (d *Differ) Check(hclFiles map[string]string, commit string) error {
 	slog.Info("Running diff check", "commit", commit, "hcl_files", len(hclFiles))
 	d.diffChecks.Inc()
 
-	hclEntries := d.parseHCLCandidates(hclFiles)
+	metaSeen := make(map[string]metaState)
+	hclEntries := d.parseHCLCandidates(hclFiles, metaSeen)
 	// hclJobSet tracks jobs that passed HCL-phase selection; used below to
 	// detect jobs running in Nomad that have no corresponding HCL file.
 	hclJobSet := make(map[string]struct{}, len(hclEntries))
@@ -656,6 +669,10 @@ func (d *Differ) Check(hclFiles map[string]string, commit string) error {
 		if _, inHCL := hclJobSet[j.ID]; !inHCL {
 			d.validateManagedMeta(j.ID, "nomad", j.Meta)
 		}
+		// Track the live side for every job, including managed ones: a
+		// manual `nomad job run` that drops the keys is exactly the
+		// meta-drift event worth noticing.
+		recordMetaSeen(metaSeen, d, "nomad", j.ID, j.Meta)
 		if !d.includeDeadJobs && j.Status == "dead" {
 			continue
 		}
@@ -676,6 +693,7 @@ func (d *Differ) Check(hclFiles map[string]string, commit string) error {
 	}
 
 	d.commitResults(diffs, selReasons, commit, listMeta, time.Now())
+	d.logMetaChanges(metaSeen)
 
 	var raftIndex uint64
 	if listMeta != nil {

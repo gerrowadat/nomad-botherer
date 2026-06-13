@@ -386,6 +386,18 @@ ERROR. Each unique issue is logged once per process and counted every cycle
 in `nomad_botherer_meta_key_issues_total`. Both the HCL and the live job's
 meta are checked.
 
+*Changes* to these keys are tracked too: when a job gains or loses
+`gitops_managed`, switches update policy, or any prefix key appears,
+disappears, or changes value — on either the HCL side or the live job —
+nomad-botherer logs the transition at INFO with the old and new values and
+what it will do to honour the change (e.g. "job is now opted in: it will be
+diffed and applied per its effective update policy", or "opt-in removed but
+the job still matches `--job-selector-glob` and remains watched"). A manual
+`nomad job run` that silently strips the keys from the live job is logged
+the same way. Transitions are counted in
+`nomad_botherer_meta_key_changes_total`. The first check after startup is a
+baseline and logs nothing.
+
 ### What gets applied, and how
 
 | Drift type | Action |
@@ -565,6 +577,7 @@ These counters and timestamps describe the diff check loop itself — how often 
 | `nomad_botherer_job_updates_total` | Counter | `operation`, `status` | JobUpdates reaching a terminal state (`SUCCEEDED`, `FAILED`, `SUPERSEDED`). |
 | `nomad_botherer_job_updates_pending` | Gauge | — | Updates currently waiting to be applied. |
 | `nomad_botherer_meta_key_issues_total` | Counter | `job`, `issue` | Job meta keys under the managed prefix that nomad-botherer cannot act on: `unknown_key` (e.g. a typo like `gitops_managd` or `gitops.managed`) or `invalid_value` (a recognised key with an unusable value, e.g. `gitops_managed = "True"`). Counted every cycle the issue persists; logged once per unique issue (WARN for unknown keys, ERROR for bad values). |
+| `nomad_botherer_meta_key_changes_total` | Counter | `job`, `source` | Managed-prefix meta keys added, removed, or changed between check cycles, on the HCL side (a commit changed them) or the live side (someone re-registered the job manually). Each transition is also logged at INFO with the behavioural consequence. |
 
 #### Git tracking
 

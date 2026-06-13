@@ -40,6 +40,14 @@
     (`gitops_managed = "True"`) log at ERROR. Logged once per unique
     issue; counted every cycle in
     `nomad_botherer_meta_key_issues_total{job,issue}`.
+  - Changes to managed-prefix meta keys are noticed and logged with their
+    behavioural consequence: opting a job in or out of management,
+    switching update policy (including falling back to the default when
+    the key is removed), and live jobs losing keys to a manual
+    `nomad job run`. Logged at INFO with old/new values and what the tool
+    does to honour the change; counted in
+    `nomad_botherer_meta_key_changes_total{job,source}`. The first check
+    after startup is a silent baseline.
 
 ### Changed
 
