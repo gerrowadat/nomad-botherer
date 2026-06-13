@@ -377,6 +377,15 @@ An unrecognised policy value in job meta is treated as `none` and logged.
 The meta key name follows `--managed-meta-prefix`: with the default prefix
 the key is `gitops_update_policy`.
 
+More generally, any meta key under the managed prefix that nomad-botherer
+cannot act on is flagged, because such keys silently change behaviour: an
+unknown key (a typo like `gitops_managd`, or `gitops.managed` with a dot) is
+logged at WARN, and a recognised key with an unusable value (such as
+`gitops_managed = "True"` — only lowercase `true`/`false` count) is logged at
+ERROR. Each unique issue is logged once per process and counted every cycle
+in `nomad_botherer_meta_key_issues_total`. Both the HCL and the live job's
+meta are checked.
+
 ### What gets applied, and how
 
 | Drift type | Action |
@@ -555,6 +564,7 @@ These counters and timestamps describe the diff check loop itself — how often 
 | `nomad_botherer_updates_blocked_creation_disabled_total` | Counter | `job` | First-time registrations blocked because `--enable-job-creation` is off. |
 | `nomad_botherer_job_updates_total` | Counter | `operation`, `status` | JobUpdates reaching a terminal state (`SUCCEEDED`, `FAILED`, `SUPERSEDED`). |
 | `nomad_botherer_job_updates_pending` | Gauge | — | Updates currently waiting to be applied. |
+| `nomad_botherer_meta_key_issues_total` | Counter | `job`, `issue` | Job meta keys under the managed prefix that nomad-botherer cannot act on: `unknown_key` (e.g. a typo like `gitops_managd` or `gitops.managed`) or `invalid_value` (a recognised key with an unusable value, e.g. `gitops_managed = "True"`). Counted every cycle the issue persists; logged once per unique issue (WARN for unknown keys, ERROR for bad values). |
 
 #### Git tracking
 

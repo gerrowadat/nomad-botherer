@@ -34,6 +34,12 @@
     creation flag, pending update count), and the regression suite gains
     end-to-end apply scenarios against a real cluster, including the
     negative test that the defaults never write.
+  - Meta keys under the managed prefix that nomad-botherer cannot act on
+    are flagged: unknown keys (typos like `gitops_managd` or
+    `gitops.managed`) log at WARN, recognised keys with unusable values
+    (`gitops_managed = "True"`) log at ERROR. Logged once per unique
+    issue; counted every cycle in
+    `nomad_botherer_meta_key_issues_total{job,issue}`.
 
 ### Changed
 

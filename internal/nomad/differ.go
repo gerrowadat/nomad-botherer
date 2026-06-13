@@ -120,6 +120,11 @@ type Differ struct {
 	updateQueue   *UpdateQueue
 	applyCh       chan struct{}
 
+	// metaIssuesLogged dedups meta-key issue log lines: each unique
+	// (job, key, value, issue) is logged once per process. The counter
+	// metric is not deduped.
+	metaIssuesLogged sync.Map
+
 	mu             sync.RWMutex
 	diffs          []JobDiff
 	selectedJobs   []SelectedJob
@@ -145,6 +150,7 @@ type Differ struct {
 	updatesBlockedCreationDisabled *prometheus.CounterVec
 	jobUpdatesTotal                *prometheus.CounterVec
 	pendingUpdates                 prometheus.Gauge
+	metaKeyIssues                  *prometheus.CounterVec
 }
 
 // newDifferBase constructs a Differ from config with metrics registered into reg.
@@ -237,6 +243,10 @@ func newDifferBase(jobs NomadJobsClient, cfg *config.Config, reg prometheus.Regi
 			Name: "nomad_botherer_job_updates_pending",
 			Help: "Number of JobUpdates currently waiting to be applied.",
 		}),
+		metaKeyIssues: f.NewCounterVec(prometheus.CounterOpts{
+			Name: "nomad_botherer_meta_key_issues_total",
+			Help: "Job meta keys under the managed prefix that nomad-botherer cannot act on, by issue (unknown_key, invalid_value). Counted every check cycle the issue persists.",
+		}, []string{"job", "issue"}),
 	}
 
 	// Pre-populate Vec metrics for all finite label values so they appear in
@@ -361,6 +371,11 @@ func (d *Differ) parseHCLCandidates(hclFiles map[string]string) map[string]hclEn
 			continue
 		}
 		jobID := *job.ID
+
+		// Flag prefix-addressed meta keys we cannot act on before the
+		// selection filter: a typo'd opt-in key is exactly what makes a job
+		// silently unselected.
+		d.validateManagedMeta(jobID, "hcl:"+filename, job.Meta)
 
 		globSel := d.jobSelectorGlob != ""
 		if globSel {
@@ -636,6 +651,11 @@ func (d *Differ) Check(hclFiles map[string]string, commit string) error {
 	// job without HCL is expected (it was stopped intentionally).
 	// Only jobs that match the configured selection criteria are considered managed.
 	for _, j := range allJobs {
+		// Validate before any skip: a live job with a malformed opt-in key
+		// is silently out of scope, which is the failure worth surfacing.
+		if _, inHCL := hclJobSet[j.ID]; !inHCL {
+			d.validateManagedMeta(j.ID, "nomad", j.Meta)
+		}
 		if !d.includeDeadJobs && j.Status == "dead" {
 			continue
 		}
@@ -685,8 +705,7 @@ func (d *Differ) effectivePolicy(meta map[string]string) UpdatePolicy {
 			if ValidUpdatePolicy(v) {
 				return UpdatePolicy(v)
 			}
-			slog.Warn("Unrecognised update policy in job meta; treating as none",
-				"key", d.managedMetaPrefix+"_update_policy", "value", v)
+			// Already logged at ERROR by validateManagedMeta during parsing.
 			return UpdatePolicyNone
 		}
 	}

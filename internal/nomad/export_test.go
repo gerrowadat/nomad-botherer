@@ -35,3 +35,8 @@ func LastNomadIndex(d *Differ) uint64 {
 	defer d.mu.RUnlock()
 	return d.lastNomadIndex
 }
+
+// MetaKeyIssues exposes the meta-key issue counter for metric assertions.
+func MetaKeyIssues(d *Differ) *prometheus.CounterVec {
+	return d.metaKeyIssues
+}
