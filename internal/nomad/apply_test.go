@@ -561,8 +561,8 @@ func TestApply_AutoscalerOnlyChurn_NotEnqueued(t *testing.T) {
 	}
 }
 
-// metaSelectCfg selects jobs by meta only (no glob), so a job can be out of
-// scope until its HCL gains the managed key.
+// metaSelectCfg selects jobs by meta only (no glob), so the pre-existing-drift
+// gate (which exempts glob-selected jobs) applies.
 func metaSelectCfg(applyExisting bool) *config.Config {
 	return &config.Config{
 		NomadNamespace:      "default",
@@ -572,89 +572,125 @@ func metaSelectCfg(applyExisting bool) *config.Config {
 	}
 }
 
-// optInMock returns a mock whose HCL job gains the gitops keys once *hasKey is
-// set. The live job exists with the given ModifyIndex; the plan reports an
-// image+meta diff (pre-existing drift plus the opt-in).
-func optInMock(hasKey *bool, calls *[]registerCall) *mockJobsClient {
-	mock := applyMock(nil, editedImagePlusMetaDiff(), 42, calls)
-	mock.parseHCLFn = func(jobHCL string, normalize bool) (*nomadapi.Job, error) {
-		if *hasKey {
-			return &nomadapi.Job{ID: strPtr("test-job"), Meta: map[string]string{
-				"gitops_managed": "true", "gitops_update_policy": "full",
-			}}, nil
-		}
-		return &nomadapi.Job{ID: strPtr("test-job")}, nil
-	}
+// fakeHistory implements nomad.HistorySource. A path present in parent returns
+// that content (ok=true); an absent path returns ok=false (file new at HEAD).
+type fakeHistory struct {
+	parent map[string]string
+}
+
+func (f fakeHistory) FileAtParent(path string) (string, bool) {
+	c, ok := f.parent[path]
+	return c, ok
+}
+
+const testJobFile = "jobs/test-job.hcl"
+
+// optInMock returns a mock whose HCL job carries the gitops keys (opted in at
+// HEAD); the live job exists with a real image diff (pre-existing drift).
+func optInMock(calls *[]registerCall) *mockJobsClient {
+	mock := applyMock(map[string]string{
+		"gitops_managed": "true", "gitops_update_policy": "full",
+	}, editedImagePlusMetaDiff(), 42, calls)
 	return mock
 }
 
-func TestApply_ExistingDrift_NotAppliedOnScopeEntry(t *testing.T) {
+func TestApply_ExistingDrift_TagAddedAtHead_NotApplied(t *testing.T) {
 	var calls []registerCall
-	var hasKey bool
-	d := nomad.NewWithClient(metaSelectCfg(false), optInMock(&hasKey, &calls))
+	d := nomad.NewWithClient(metaSelectCfg(false), optInMock(&calls))
+	// The tag was added at HEAD: the parent version of the file lacks it.
+	d.SetHistorySource(fakeHistory{parent: map[string]string{testJobFile: `job "test-job" {}`}})
 
-	// Cycle 1: job not opted in (no key, no glob) — out of scope.
-	runCheck(t, d, "commit0aaaaaa")
-	// Cycle 2: key added while running — scope entry; image drift is pre-existing.
-	hasKey = true
-	runCheck(t, d, "commit1bbbbbb")
+	runCheck(t, d, "aaaa111fffff")
 	nomad.DrainUpdates(d)
 
 	if len(calls) != 0 {
-		t.Errorf("pre-existing drift must not apply on scope entry by default, got %d calls", len(calls))
+		t.Errorf("drift that pre-dates opt-in must not apply by default, got %d calls", len(calls))
 	}
 	if got := testutil.ToFloat64(nomad.UpdatesBlockedExistingDrift(d).WithLabelValues("test-job")); got != 1 {
 		t.Errorf("blocked-preexisting metric: want 1, got %v", got)
 	}
-}
-
-func TestApply_ExistingDrift_AppliedWithFlag(t *testing.T) {
-	var calls []registerCall
-	var hasKey bool
-	d := nomad.NewWithClient(metaSelectCfg(true), optInMock(&hasKey, &calls))
-
-	runCheck(t, d, "commit0aaaaaa")
-	hasKey = true
-	runCheck(t, d, "commit1bbbbbb")
-	nomad.DrainUpdates(d)
-
-	if len(calls) != 1 {
-		t.Errorf("with --apply-existing-drift, drift should apply on scope entry, got %d calls", len(calls))
+	// The diff is still surfaced, annotated with the reason.
+	diffs, _, _ := d.Diffs()
+	if len(diffs) != 1 || diffs[0].ApplyAction != nomad.ApplyActionPreExisting {
+		t.Errorf("diff should be surfaced with the pre-existing reason, got %+v", diffs)
 	}
 }
 
-func TestApply_ExistingDrift_AppliesAfterLaterCommit(t *testing.T) {
+func TestApply_ExistingDrift_TagAddedAtHead_AppliedWithFlag(t *testing.T) {
 	var calls []registerCall
-	var hasKey bool
-	d := nomad.NewWithClient(metaSelectCfg(false), optInMock(&hasKey, &calls))
+	d := nomad.NewWithClient(metaSelectCfg(true), optInMock(&calls))
+	d.SetHistorySource(fakeHistory{parent: map[string]string{testJobFile: `job "test-job" {}`}})
 
-	runCheck(t, d, "commit0aaaaaa") // out of scope
-	hasKey = true
-	runCheck(t, d, "commit1bbbbbb") // scope entry: frozen, not applied
-	if len(calls) != 0 {
-		t.Fatalf("precondition: nothing applied at scope entry, got %d", len(calls))
-	}
-	// A later commit arrives: the freeze lifts and drift applies.
-	runCheck(t, d, "commit2cccccc")
+	runCheck(t, d, "aaaa111fffff")
 	nomad.DrainUpdates(d)
 
 	if len(calls) != 1 {
-		t.Errorf("a commit after scope entry should lift the freeze and apply, got %d calls", len(calls))
+		t.Errorf("with --apply-existing-drift the pre-existing drift should apply, got %d calls", len(calls))
 	}
 }
 
-// TestApply_ExistingDrift_ReconcilesAtStartup verifies the gate does not fire
-// for jobs already in scope on the first cycle (the reconcile-on-start path):
-// prevSelected is nil, so nothing is frozen.
-func TestApply_ExistingDrift_ReconcilesAtStartup(t *testing.T) {
+// TestApply_ExistingDrift_TagPresentAtParent_Applied is the established /
+// reconcile-on-start case: the tag was already present before HEAD, so the job
+// is not freshly opted in and its drift reconciles normally.
+func TestApply_ExistingDrift_TagPresentAtParent_Applied(t *testing.T) {
 	var calls []registerCall
-	hasKey := true // already opted in before the process started observing
-	d := nomad.NewWithClient(metaSelectCfg(false), optInMock(&hasKey, &calls))
+	d := nomad.NewWithClient(metaSelectCfg(false), optInMock(&calls))
+	d.SetHistorySource(fakeHistory{parent: map[string]string{
+		testJobFile: `job "test-job" { meta { gitops_managed = "true" } }`,
+	}})
 
-	runCheck(t, d, "commit0aaaaaa") // first cycle: established, not frozen
+	runCheck(t, d, "aaaa111fffff")
 	nomad.DrainUpdates(d)
 
 	if len(calls) != 1 {
-		t.Errorf("a job already in scope at startup should reconcile, got %d calls", len(calls))
+		t.Errorf("an established job (tag present before HEAD) should reconcile, got %d calls", len(calls))
+	}
+}
+
+// TestApply_ExistingDrift_NoHistory_Applied verifies that without a history
+// source the gate is skipped so reconciliation is not broken.
+func TestApply_ExistingDrift_NoHistory_Applied(t *testing.T) {
+	var calls []registerCall
+	d := nomad.NewWithClient(metaSelectCfg(false), optInMock(&calls))
+	// No SetHistorySource call.
+
+	runCheck(t, d, "aaaa111fffff")
+	nomad.DrainUpdates(d)
+
+	if len(calls) != 1 {
+		t.Errorf("without history the pre-existing gate must not block, got %d calls", len(calls))
+	}
+}
+
+// TestApply_ExistingDrift_GlobSelectedExempt verifies that glob-selected jobs
+// (no opt-in moment) are never frozen, even when the tag was added at HEAD.
+func TestApply_ExistingDrift_GlobSelectedExempt(t *testing.T) {
+	var calls []registerCall
+	cfg := metaSelectCfg(false)
+	cfg.JobSelectorGlob = "*"
+	d := nomad.NewWithClient(cfg, optInMock(&calls))
+	d.SetHistorySource(fakeHistory{parent: map[string]string{testJobFile: `job "test-job" {}`}})
+
+	runCheck(t, d, "aaaa111fffff")
+	nomad.DrainUpdates(d)
+
+	if len(calls) != 1 {
+		t.Errorf("glob-selected jobs have no opt-in moment and must not be frozen, got %d calls", len(calls))
+	}
+}
+
+// TestApply_ExistingDrift_FileNewAtHead_Applied verifies that a file created
+// at HEAD (no parent version) is not treated as a retroactive opt-in: the tag
+// and spec arrived together, so the drift is applied (subject to policy).
+func TestApply_ExistingDrift_FileNewAtHead_Applied(t *testing.T) {
+	var calls []registerCall
+	d := nomad.NewWithClient(metaSelectCfg(false), optInMock(&calls))
+	d.SetHistorySource(fakeHistory{parent: map[string]string{}}) // file absent at parent
+
+	runCheck(t, d, "aaaa111fffff")
+	nomad.DrainUpdates(d)
+
+	if len(calls) != 1 {
+		t.Errorf("a file created with the tag at HEAD should apply (tag present when spec introduced), got %d calls", len(calls))
 	}
 }

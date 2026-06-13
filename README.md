@@ -450,15 +450,20 @@ reviewed; only changes committed *after* the tag is added are applied.
 Set `--apply-existing-drift` to apply pre-existing drift at opt-in instead —
 then the job converges to its HCL as soon as the tag lands.
 
-This is scoped precisely to the opt-in moment, which nomad-botherer must
-*witness*: a job that gains the tag while the process is running is frozen at
-that commit until a later commit arrives (or the flag is set). A job that
-already carries the tag when the process starts is **established**, not
-freshly opted in, so its drift reconciles normally — a restart does not
-freeze your whole cluster. The freeze is counted in
-`nomad_botherer_updates_blocked_preexisting_total{job}`. Jobs selected by
-`--job-selector-glob` are always in scope and have no opt-in moment, so this
-gate never applies to them.
+The decision is made from **git history**, so it holds the same whether the
+tag is added while nomad-botherer is running or before it starts (a fresh
+start or a restart). For a job's HCL file, the rule is: if the managed tag
+was present in the commit *before* HEAD, the job was already managed and its
+drift reconciles normally; if the tag was *added* in the HEAD commit (the
+file existed before without it), the drift pre-dates opt-in and is held. A
+file created with the tag in a single commit is not a retroactive opt-in —
+the tag and the spec arrived together — so it applies. Because the signal is
+git-derived rather than remembered, a restart never freezes an
+already-managed cluster. Jobs selected by `--job-selector-glob` are always in
+scope and have no opt-in moment, so this gate never applies to them. The
+freeze is counted in `nomad_botherer_updates_blocked_preexisting_total{job}`,
+and each held diff is shown on `/diffs` and the API with its reason (see
+[Why a diff is or is not applied](#why-a-diff-is-or-is-not-applied)).
 
 ### What gets applied, and how
 
@@ -495,6 +500,24 @@ policy that allowed it, and the CAS token used.
 
 The design background is in `docs/proposals/gitops-job-updates.md` and
 `docs/proposals/update-policies.md`.
+
+### Why a diff is or is not applied
+
+Every diff carries an `apply_action` describing what nomad-botherer will do
+about it, so you never have to scrape logs to find out why a drift is sitting
+unapplied. It appears on `/diffs` (as a `→ …` line under each job), in the
+`/api/v1/diffs` and `/healthz` JSON (the `apply_action` field), and is
+documented in the OpenAPI spec. Values:
+
+| `apply_action` | Meaning |
+|---|---|
+| `queued` | An update was enqueued and will be applied. |
+| `blocked_by_policy` | The effective update policy disallows it (e.g. `none`, or `image-only` for a non-image change). |
+| `blocked_preexisting_drift` | The drift pre-dates the job's opt-in; set `--apply-existing-drift` to apply. |
+| `blocked_creation_disabled` | First-time registration needs `--enable-job-creation`. |
+| `skipped_meta_only` | The change is confined to `gitops_*` meta keys (only shown when `--count-meta-only-changes` is on). |
+| `observation_only` | `missing_from_hcl`; deregistration is not implemented. |
+| `no_actionable_change` | The only diff is autoscaler-owned Count/Scaling churn. |
 
 ---
 

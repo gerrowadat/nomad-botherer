@@ -390,3 +390,51 @@ func TestBuildAuth_SSHKey_BadKnownHosts(t *testing.T) {
 		t.Error("valid key with an unreadable known_hosts file should fail")
 	}
 }
+
+func TestFileAtParent(t *testing.T) {
+	dir, repo := makeDiskRepo(t, map[string]string{"app.hcl": `job "app" { v = 1 }`})
+	commitFiles(t, dir, repo, map[string]string{"app.hcl": `job "app" { v = 2 }`}, "bump")
+
+	w := newTestWatcher(&config.Config{RepoURL: dir, Branch: "main"}, nil)
+	if err := w.Clone(context.Background()); err != nil {
+		t.Fatalf("Clone: %v", err)
+	}
+
+	// HEAD has v=2; the parent had v=1.
+	content, ok := w.FileAtParent("app.hcl")
+	if !ok {
+		t.Fatal("FileAtParent should find app.hcl at the parent commit")
+	}
+	if content != `job "app" { v = 1 }` {
+		t.Errorf("unexpected parent content: %q", content)
+	}
+
+	// A file that did not exist at the parent.
+	commitFiles(t, dir, repo, map[string]string{"new.hcl": `job "new" {}`}, "add new")
+	w2 := newTestWatcher(&config.Config{RepoURL: dir, Branch: "main"}, nil)
+	if err := w2.Clone(context.Background()); err != nil {
+		t.Fatalf("Clone: %v", err)
+	}
+	if _, ok := w2.FileAtParent("new.hcl"); ok {
+		t.Error("FileAtParent should report ok=false for a file new at HEAD")
+	}
+}
+
+func TestFileAtParent_RootCommit(t *testing.T) {
+	dir, _ := makeDiskRepo(t, map[string]string{"app.hcl": `job "app" {}`})
+	w := newTestWatcher(&config.Config{RepoURL: dir, Branch: "main"}, nil)
+	if err := w.Clone(context.Background()); err != nil {
+		t.Fatalf("Clone: %v", err)
+	}
+	// HEAD is the root commit (makeDiskRepo makes a single commit): no parent.
+	if _, ok := w.FileAtParent("app.hcl"); ok {
+		t.Error("FileAtParent should report ok=false at the root commit")
+	}
+}
+
+func TestFileAtParent_NoRepo(t *testing.T) {
+	w := newTestWatcher(&config.Config{}, nil)
+	if _, ok := w.FileAtParent("app.hcl"); ok {
+		t.Error("FileAtParent should report ok=false before clone")
+	}
+}
