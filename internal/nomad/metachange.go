@@ -111,7 +111,7 @@ func (d *Differ) diffMetaState(source, jobID string, prev, cur metaState) {
 func (d *Differ) metaChangeAction(jobID, source, key, oldV, newV string, hasNew bool) string {
 	switch key {
 	case d.managedMetaPrefix + "_managed":
-		return d.managedTransitionAction(jobID, newV, hasNew)
+		return d.managedTransitionAction(jobID, source, newV, hasNew)
 	case d.managedMetaPrefix + "_update_policy":
 		return d.policyTransitionAction(source, newV, hasNew)
 	default:
@@ -120,7 +120,12 @@ func (d *Differ) metaChangeAction(jobID, source, key, oldV, newV string, hasNew 
 }
 
 // managedTransitionAction explains the consequence of an opt-in change.
-func (d *Differ) managedTransitionAction(jobID, newV string, hasNew bool) string {
+func (d *Differ) managedTransitionAction(jobID, source, newV string, hasNew bool) string {
+	if source == "nomad" {
+		// Git is always the source of truth for our keys: a live-side change
+		// only matters for jobs Git knows nothing about.
+		return "noticed on the live job only; when the job has an HCL file in the repo, Git is the source of truth and the live value does not drive behaviour (for jobs without HCL, the live key controls missing_from_hcl detection)"
+	}
 	if hasNew && newV == "true" {
 		return "job is now opted in to GitOps management: it will be diffed against its HCL and applied per its effective update policy; if the live job does not carry the key yet, that difference is itself drift and converges the same way"
 	}

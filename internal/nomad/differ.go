@@ -97,11 +97,6 @@ type Differ struct {
 	includeDeadJobs   bool
 	jobSelectorGlob   string
 	managedMetaPrefix string
-	// metaHCLCanonical narrows managed-meta-prefix selection to the HCL key
-	// only. By default (false) selection is the union: the HCL key wins when
-	// present (Git is intent), and the live job's key also selects so
-	// already-managed jobs stay in scope while their HCL catches up.
-	metaHCLCanonical bool
 	// redactSecrets replaces potentially sensitive plan-diff values (env vars,
 	// templates, secret-like keys) with RedactedValue before the diff is
 	// stored, so no downstream consumer can expose them.
@@ -177,7 +172,6 @@ func newDifferBase(jobs NomadJobsClient, cfg *config.Config, reg prometheus.Regi
 		includeDeadJobs:   cfg.IncludeDeadJobs,
 		jobSelectorGlob:   cfg.JobSelectorGlob,
 		managedMetaPrefix: cfg.ManagedMetaPrefix,
-		metaHCLCanonical:  cfg.ManagedMetaHCLCanonical,
 		redactSecrets:     cfg.RedactSecrets,
 		defaultPolicy:     defaultPolicy,
 		enableJobCreation: cfg.EnableJobCreation,
@@ -360,11 +354,13 @@ func (d *Differ) SelectedJobs() ([]SelectedJob, time.Time, string) {
 }
 
 // parseHCLCandidates parses all HCL files and returns those that pass the
-// preliminary selection filter (glob match or managed meta key in HCL).
-// Final selection against live Nomad state is done later in checkHCLCandidate.
+// selection filter (glob match or managed meta key in HCL), plus the set of
+// every successfully parsed job ID — selected or not — so the Nomad-side
+// phase knows which jobs Git has an opinion about.
 // metaSeen collects each parsed job's prefix-key snapshot for change tracking.
-func (d *Differ) parseHCLCandidates(hclFiles map[string]string, metaSeen map[string]metaState) map[string]hclEntry {
+func (d *Differ) parseHCLCandidates(hclFiles map[string]string, metaSeen map[string]metaState) (map[string]hclEntry, map[string]struct{}) {
 	entries := make(map[string]hclEntry)
+	parsedIDs := make(map[string]struct{})
 	for filename, content := range hclFiles {
 		if !jobBlockRe.MatchString(content) {
 			slog.Debug("Skipping HCL file with no job stanza", "file", filename)
@@ -388,6 +384,7 @@ func (d *Differ) parseHCLCandidates(hclFiles map[string]string, metaSeen map[str
 		// silently unselected.
 		d.validateManagedMeta(jobID, "hcl:"+filename, job.Meta)
 		recordMetaSeen(metaSeen, d, "hcl", jobID, job.Meta)
+		parsedIDs[jobID] = struct{}{}
 
 		globSel := d.jobSelectorGlob != ""
 		if globSel {
@@ -403,7 +400,7 @@ func (d *Differ) parseHCLCandidates(hclFiles map[string]string, metaSeen map[str
 		entries[jobID] = hclEntry{job: job, file: filename, globSel: globSel, metaHCL: metaHCL}
 		slog.Debug("Parsed HCL file", "file", filename, "job_id", jobID)
 	}
-	return entries
+	return entries, parsedIDs
 }
 
 // updateCandidate carries the context needed to turn a detected diff into a
@@ -435,23 +432,14 @@ func (d *Differ) checkHCLCandidate(jobID string, entry hclEntry, q *nomadapi.Que
 	nomadJob, _, infoErr := d.jobs.Info(jobID, q)
 	notFound := infoErr != nil && isNotFound(infoErr)
 
-	// Git is intent: the opt-in key in HCL selects the job even when the
-	// live copy does not carry it yet — the key's absence on the live job
-	// is itself drift, and applying it (policy permitting) is how the live
-	// meta converges. Without metaHCLCanonical the live job's key also
-	// selects (union), so already-managed jobs stay in scope; with it, only
-	// the HCL key counts.
-	metaSelected := entry.metaHCL
-	if !d.metaHCLCanonical && !metaSelected && !notFound && infoErr == nil {
-		metaSelected = nomadJob != nil && d.metaKeyPresent(nomadJob.Meta)
-	}
-
-	selected, reason := selectionReasonFor(entry.globSel, metaSelected)
-	if !selected {
-		slog.Debug("Skipping HCL job: managed meta key absent from live Nomad job", "job", jobID)
-		d.jobsSkippedBySel.WithLabelValues("hcl").Inc()
-		return false, "", nil, nil
-	}
+	// Git is always the source of truth for nomad-botherer's own behaviour:
+	// when a job has an HCL file, its keys alone decide selection. The opt-in
+	// key in HCL selects the job even when the live copy does not carry it
+	// yet — the key's absence on the live job is itself drift, and applying
+	// it (policy permitting) is how the live meta converges. A live key with
+	// no HCL counterpart never selects; it is surfaced as a meta-change
+	// notice instead.
+	_, reason := selectionReasonFor(entry.globSel, entry.metaHCL)
 
 	if notFound {
 		diff := &JobDiff{
@@ -640,7 +628,7 @@ func (d *Differ) Check(hclFiles map[string]string, commit string) error {
 	d.diffChecks.Inc()
 
 	metaSeen := make(map[string]metaState)
-	hclEntries := d.parseHCLCandidates(hclFiles, metaSeen)
+	hclEntries, parsedIDs := d.parseHCLCandidates(hclFiles, metaSeen)
 	// hclJobSet tracks jobs that passed HCL-phase selection; used below to
 	// detect jobs running in Nomad that have no corresponding HCL file.
 	hclJobSet := make(map[string]struct{}, len(hclEntries))
@@ -678,6 +666,17 @@ func (d *Differ) Check(hclFiles map[string]string, commit string) error {
 		// meta-drift event worth noticing.
 		recordMetaSeen(metaSeen, d, "nomad", j.ID, j.Meta)
 		if !d.includeDeadJobs && j.Status == "dead" {
+			continue
+		}
+		// Git is always the source of truth for our own keys: when the job
+		// has an HCL file, that file alone already decided selection in the
+		// HCL phase. A live key on a job whose HCL does not opt in never
+		// overrides Git; it is only surfaced via meta validation and
+		// change notices.
+		if _, parsed := parsedIDs[j.ID]; parsed {
+			if _, ok := hclJobSet[j.ID]; !ok {
+				d.jobsSkippedBySel.WithLabelValues("nomad").Inc()
+			}
 			continue
 		}
 		// Meta is populated because the List call includes ?meta=true.

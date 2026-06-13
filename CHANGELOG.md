@@ -2,18 +2,27 @@
 
 ## Unreleased
 
-### Changed
+### Breaking changes
 
-- **Git is intent for meta-based job selection.** The `gitops_managed`
-  key in a job's HCL now selects the job even when the running job's meta
-  does not carry it; the missing live key is itself drift and converges
-  through the normal apply path (policy permitting). Opting a running job
-  in is now a single commit — previously, with the live job's meta as the
-  source of truth (v0.3.0 behaviour), adding the key in Git did nothing
-  until someone manually re-registered the job. The live job's key still
-  selects too (union), so already-managed jobs stay in scope.
-  `--managed-meta-hcl-canonical` now means: select by the HCL key *only*,
-  ignoring the live key.
+- **Git is always the source of truth for nomad-botherer's own behaviour,
+  and `--managed-meta-hcl-canonical` / `MANAGED_META_HCL_CANONICAL` is
+  removed** (passing the flag is now a startup error). When a job has an
+  HCL file in the repo, that file alone decides selection and update
+  policy, in both directions:
+  - `gitops_managed = "true"` in HCL selects the job even when the running
+    job's meta does not carry it; the missing live key is itself drift and
+    converges through the normal apply path (policy permitting). Opting a
+    running job in is a single commit — previously (v0.3.0 behaviour,
+    where live meta was the source of truth) adding the key in Git did
+    nothing until someone manually re-registered the job.
+  - A stale `gitops_managed` key on a live job whose HCL does *not* carry
+    it never selects the job. Previously the live key kept such jobs
+    selected and they were misreported as `missing_from_hcl`.
+
+  Live meta only drives behaviour for jobs Git knows nothing about
+  (`missing_from_hcl` detection). Live-side key changes on jobs with HCL
+  are still noticed, logged, and counted — they just never change
+  behaviour.
 
 ### New features
 

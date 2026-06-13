@@ -76,10 +76,15 @@ deregistered — even if it is running in Nomad without a corresponding HCL file
 This is the "Operator Pattern in Nomad" (see scalad, Pondidum/nomad-operator).
 Do not change this default without a strong reason; it is what prevents
 nomad-botherer from touching manually-managed jobs on a shared cluster.
-Selection is Git-is-intent: the HCL key selects the job even when the live
-copy lacks it (the missing live key is drift and converges via the apply
-path), unioned with the live key so already-managed jobs stay in scope.
-`--managed-meta-hcl-canonical` restricts selection to the HCL key only.
+**Git is always the source of truth for nomad-botherer's own behaviour,
+with no flag override — this is a hard invariant.** When a job has an HCL
+file in the repo, that file alone decides selection and policy: the HCL key
+selects the job even when the live copy lacks it (the missing live key is
+drift and converges via the apply path), and a stale live key never selects
+a job whose HCL opts out. Live meta only drives behaviour for jobs Git
+knows nothing about (`missing_from_hcl` detection). Do not reintroduce a
+flag that inverts any of this; `--managed-meta-hcl-canonical` was removed
+deliberately.
 
 **Separate the two uses of job meta.** The `gitops_managed` flag is set by
 humans in HCL and read by the tool — that is fine. Writing tool state (applied

@@ -40,10 +40,12 @@ type Config struct {
 	EnableJobCreation   bool
 	ApplyInterval       time.Duration
 
-	// Job selection
-	JobSelectorGlob          string
-	ManagedMetaPrefix        string
-	ManagedMetaHCLCanonical  bool
+	// Job selection. Git is always the source of truth for nomad-botherer's
+	// own meta keys: when a job has an HCL file in the repo, that file alone
+	// decides selection and policy. There is deliberately no flag to invert
+	// this.
+	JobSelectorGlob   string
+	ManagedMetaPrefix string
 
 	// Staleness
 	MaxGitStaleness   time.Duration
@@ -88,8 +90,7 @@ func LoadFromArgs(fs *flag.FlagSet, args []string) (*Config, error) {
 	fs.BoolVar(&c.EnableJobCreation, "enable-job-creation", envBoolOrDefault("ENABLE_JOB_CREATION", false), "Allow registering jobs that exist in Git but not in Nomad (first-time registration). Off by default; requires an effective update policy of full for the job.")
 	fs.DurationVar(&c.ApplyInterval, "apply-interval", envDurationOrDefault("APPLY_INTERVAL", 10*time.Second), "Fallback cadence of the apply loop; enqueued updates are also applied immediately")
 	fs.StringVar(&c.JobSelectorGlob, "job-selector-glob", envOrDefault("JOB_SELECTOR_GLOB", ""), "Glob pattern selecting jobs by name (e.g. 'myprefix-*', '*' for all). Jobs matching either this or --managed-meta-prefix are watched. Empty means no glob selection.")
-	fs.StringVar(&c.ManagedMetaPrefix, "managed-meta-prefix", envOrDefault("MANAGED_META_PREFIX", "gitops"), "Prefix for job meta keys used by nomad-botherer (e.g. 'gitops' means 'gitops_managed = true' opts a job in). Empty disables meta-based selection.")
-	fs.BoolVar(&c.ManagedMetaHCLCanonical, "managed-meta-hcl-canonical", envBoolOrDefault("MANAGED_META_HCL_CANONICAL", false), "Select jobs by the managed meta key in HCL only. By default selection is the union of the HCL key (Git is intent — it wins even if the running job lacks the key) and the live job's key; enable this to ignore the live key entirely.")
+	fs.StringVar(&c.ManagedMetaPrefix, "managed-meta-prefix", envOrDefault("MANAGED_META_PREFIX", "gitops"), "Prefix for job meta keys used by nomad-botherer (e.g. 'gitops' means 'gitops_managed = true' in a job's HCL opts it in). Git is always the source of truth for these keys: when a job has an HCL file, the live job's keys are ignored for selection. Empty disables meta-based selection.")
 	fs.DurationVar(&c.MaxGitStaleness, "max-git-staleness", envDurationOrDefault("MAX_GIT_STALENESS", 0), "Maximum time since last successful git fetch before forcing a refresh (0 disables)")
 	fs.DurationVar(&c.MaxNomadStaleness, "max-nomad-staleness", envDurationOrDefault("MAX_NOMAD_STALENESS", 0), "Maximum time since last successful Nomad diff check before forcing a refresh (0 disables)")
 

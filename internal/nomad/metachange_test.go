@@ -202,6 +202,9 @@ func TestMetaChange_LiveSide_ManualRegisterLosesKeys(t *testing.T) {
 	if !strings.Contains(logs, "policy is read from the HCL side") {
 		t.Errorf("live policy change should note HCL is authoritative, got:\n%s", logs)
 	}
+	if !strings.Contains(logs, "Git is the source of truth and the live value does not drive behaviour") {
+		t.Errorf("live managed-key change should note Git primacy, got:\n%s", logs)
+	}
 	got := testutil.ToFloat64(nomad.MetaKeyChanges(h.d).WithLabelValues("test-job", "nomad"))
 	if got != 2 { // both keys removed
 		t.Errorf("meta_key_changes_total{nomad}: want 2, got %v", got)

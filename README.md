@@ -181,23 +181,27 @@ If you need to change the prefix — for example because another team already ow
 
 **Source of truth for the meta key**
 
-Git is intent: if `gitops_managed = "true"` is present in the HCL file, the
-job is selected even when the running job's meta does not carry the key —
-the key's absence on the live job is itself drift (it shows up in the plan
-as a meta addition), and applying that drift (policy permitting) is how the
-live job converges. This means opting a running job in is a single commit;
-no manual re-register is needed. The live job's key also selects (the two
-are a union), so already-managed jobs stay in scope while their HCL catches
-up, and jobs not yet in Nomad are detected as `missing_from_nomad` from
-their HCL alone.
+**Git is always — always — the source of truth for nomad-botherer's own
+behaviour.** There is deliberately no flag to change this. Concretely, when
+a job has an HCL file in the watched repo, that file alone decides whether
+the job is managed and under which update policy:
 
-To restrict selection to the HCL key only — ignoring the live job's key
-entirely — pass `--managed-meta-hcl-canonical`:
+- `gitops_managed = "true"` in HCL selects the job even when the running
+  job's meta does not carry the key. The key's absence on the live job is
+  itself drift (it shows up in the plan as a meta addition), and applying
+  that drift (policy permitting) is how the live job converges. Opting a
+  running job in is a single commit; no manual re-register is needed.
+- The reverse holds too: if the HCL exists and does *not* carry the key, a
+  stale key on the live job never selects it. Removing the key from Git
+  unmanages the job immediately, regardless of what the live job claims.
+- Jobs not yet in Nomad are detected as `missing_from_nomad` from their HCL
+  alone.
 
-```bash
-./nomad-botherer --managed-meta-hcl-canonical ...
-# job is selected if HCL carries gitops_managed = "true", regardless of live Nomad meta
-```
+The live job's meta only matters for jobs Git knows nothing about: a
+running job with `gitops_managed = "true"` and no HCL file in the repo is
+reported as `missing_from_hcl`. Live-side key changes on jobs that *do*
+have HCL are still noticed and logged (see meta-key change tracking below),
+but they never change behaviour.
 
 **Opting a job in via meta tag (default method):**
 
@@ -325,7 +329,6 @@ Every flag has a corresponding environment variable. Environment variables are r
 | `--apply-interval` | `APPLY_INTERVAL` | `10s` | Fallback cadence of the apply loop; enqueued updates are also applied immediately. |
 | `--job-selector-glob` | `JOB_SELECTOR_GLOB` | *(empty — no glob)* | Glob pattern selecting jobs to watch by name (e.g. `myprefix-*`, `*` for all). Combined with `--managed-meta-prefix` as a union. |
 | `--managed-meta-prefix` | `MANAGED_META_PREFIX` | `gitops` | Prefix for job meta keys used by nomad-botherer. With prefix `gitops`, the key `gitops_managed = "true"` opts a job in. Empty disables meta-based selection. |
-| `--managed-meta-hcl-canonical` | `MANAGED_META_HCL_CANONICAL` | `false` | When false (default), meta selection is the union of the HCL key (Git is intent — it wins even when the running job lacks the key) and the live job's key. When true, only the HCL key counts and the live key is ignored. |
 | `--max-git-staleness` | `MAX_GIT_STALENESS` | `0` (disabled) | If the git repo has not been successfully fetched within this window, force an immediate fetch. Set to `0` to disable. E.g. `--max-git-staleness=30m` |
 | `--max-nomad-staleness` | `MAX_NOMAD_STALENESS` | `0` (disabled) | If the Nomad diff check has not run within this window, force an immediate check. Set to `0` to disable. E.g. `--max-nomad-staleness=10m` |
 | `--log-level` | `LOG_LEVEL` | `info` | Log level: `debug`, `info`, `warn`, `error` |
