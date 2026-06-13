@@ -110,9 +110,9 @@ func (a ApplyAction) Describe() string {
 	case ApplyActionCreationBlocked:
 		return "not applied: job creation disabled (set --enable-job-creation)"
 	case ApplyActionMetaOnly:
-		return "not applied: change is only to gitops meta keys"
+		return "not applied: change is confined to managed meta keys"
 	case ApplyActionDeregister:
-		return "not applied: deregistration is not enabled"
+		return "not applied: deregistration is not implemented"
 	case ApplyActionNoChange:
 		return "no actionable change (autoscaler-owned)"
 	default:
@@ -134,9 +134,13 @@ type hclEntry struct {
 // satisfies it. When nil, pre-existing-drift detection is disabled and drift
 // reconciles normally.
 type HistorySource interface {
-	// FileAtParent returns the content of path at the parent of the current
-	// HEAD commit; ok is false at the root commit or when the file is absent.
-	FileAtParent(path string) (content string, ok bool)
+	// FileAtParentOf returns the content of path at the first parent of the
+	// named commit. ok is false when the commit is unknown, has no parent
+	// (root commit), or the file is absent there. The lookup is keyed off the
+	// commit being evaluated — not the repo's current HEAD — so the decision
+	// stays consistent with the HCL snapshot passed to Check even if the
+	// watcher pulls a newer commit concurrently.
+	FileAtParentOf(commit, path string) (content string, ok bool)
 }
 
 // NomadJobsClient is the subset of the Nomad API jobs client we use.
@@ -743,7 +747,7 @@ func (d *Differ) Check(hclFiles map[string]string, commit string) error {
 		if cand != nil {
 			// Decide the disposition once; it is recorded on the diff (for the
 			// API/console) and drives whether the update is enqueued below.
-			cand.action = d.decideApplyAction(cand)
+			cand.action = d.decideApplyAction(cand, commit)
 		}
 		if diff != nil {
 			metaOnly := cand != nil && cand.class == DiffClassManagedMetaOnly
@@ -859,30 +863,31 @@ func (d *Differ) SetHistorySource(h HistorySource) {
 
 // isPreExistingDrift reports whether a candidate's drift pre-dates the job
 // entering management scope — i.e. the managed opt-in tag was added in the
-// HEAD commit (absent in HEAD's parent version of the job's HCL file). This is
-// derived from git history, so it holds identically whether the tag was added
-// while the process was running or before it started: a job already managed in
-// an earlier commit is established and reconciles normally; one opted in at
-// HEAD is frozen until a later commit arrives.
+// commit being evaluated (absent in that commit's parent version of the job's
+// HCL file). This is derived from git history, so it holds identically whether
+// the tag was added while the process was running or before it started: a job
+// already managed in an earlier commit is established and reconciles normally;
+// one opted in at this commit is frozen until a later commit arrives.
 //
 // Glob-selected jobs are always in scope and have no opt-in moment, so they
 // are never pre-existing. Creations have no live job to pre-date. When history
 // is unavailable the check is skipped (not pre-existing) so reconciliation is
 // not broken.
-func (d *Differ) isPreExistingDrift(c *updateCandidate) bool {
+func (d *Differ) isPreExistingDrift(c *updateCandidate, commit string) bool {
 	if c.isCreation || c.globSel || d.history == nil || d.managedKeyRe == nil || c.hclFile == "" {
 		return false
 	}
-	parent, ok := d.history.FileAtParent(c.hclFile)
+	parent, ok := d.history.FileAtParentOf(commit, c.hclFile)
 	if !ok {
-		// No parent version: the file was created at HEAD (or HEAD is the root
-		// commit). The tag and the spec were introduced together, so the tag
-		// was present when the diff was introduced — not a retroactive opt-in.
+		// No parent version: the file was created at this commit (or it is the
+		// root commit). The tag and the spec were introduced together, so the
+		// tag was present when the diff was introduced — not a retroactive
+		// opt-in.
 		return false
 	}
-	// Tag present at the parent → the job was already managed before HEAD →
-	// established. Absent → the tag was added to a pre-existing file at HEAD →
-	// retroactive opt-in, so the drift pre-dates it.
+	// Tag present at the parent → the job was already managed before this
+	// commit → established. Absent → the tag was added to a pre-existing file
+	// at this commit → retroactive opt-in, so the drift pre-dates it.
 	return !d.managedKeyRe.MatchString(parent)
 }
 
@@ -890,14 +895,14 @@ func (d *Differ) isPreExistingDrift(c *updateCandidate) bool {
 // reason via metrics/logs. It does not enqueue anything; the caller enqueues
 // when the action is ApplyActionQueued. The gates are ordered most-conservative
 // first so the surfaced reason is the primary one.
-func (d *Differ) decideApplyAction(c *updateCandidate) ApplyAction {
+func (d *Differ) decideApplyAction(c *updateCandidate, commit string) ApplyAction {
 	if c.class == DiffClassNone && !c.isCreation {
 		// Everything in the diff is autoscaler-owned Count/Scaling churn;
 		// Git has nothing to apply. The diff stays visible as an observation.
 		return ApplyActionNoChange
 	}
 
-	if !c.isCreation && d.isPreExistingDrift(c) && !d.applyExistingDrift {
+	if !c.isCreation && d.isPreExistingDrift(c, commit) && !d.applyExistingDrift {
 		// The drift was already there when the job entered scope (the managed
 		// tag was added in the HEAD commit). Conservative default: opting a job
 		// in does not retroactively mutate it; only changes committed after

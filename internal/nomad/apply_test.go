@@ -573,12 +573,14 @@ func metaSelectCfg(applyExisting bool) *config.Config {
 }
 
 // fakeHistory implements nomad.HistorySource. A path present in parent returns
-// that content (ok=true); an absent path returns ok=false (file new at HEAD).
+// that content (ok=true); an absent path returns ok=false (file new at the
+// commit). The commit argument is ignored: these tests use a single commit per
+// job, so keying off the path is sufficient.
 type fakeHistory struct {
 	parent map[string]string
 }
 
-func (f fakeHistory) FileAtParent(path string) (string, bool) {
+func (f fakeHistory) FileAtParentOf(_, path string) (string, bool) {
 	c, ok := f.parent[path]
 	return c, ok
 }

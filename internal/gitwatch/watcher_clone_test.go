@@ -391,7 +391,7 @@ func TestBuildAuth_SSHKey_BadKnownHosts(t *testing.T) {
 	}
 }
 
-func TestFileAtParent(t *testing.T) {
+func TestFileAtParentOf(t *testing.T) {
 	dir, repo := makeDiskRepo(t, map[string]string{"app.hcl": `job "app" { v = 1 }`})
 	commitFiles(t, dir, repo, map[string]string{"app.hcl": `job "app" { v = 2 }`}, "bump")
 
@@ -400,41 +400,63 @@ func TestFileAtParent(t *testing.T) {
 		t.Fatalf("Clone: %v", err)
 	}
 
-	// HEAD has v=2; the parent had v=1.
-	content, ok := w.FileAtParent("app.hcl")
+	// HEAD (v=2) has a parent holding v=1.
+	head := w.LastCommit()
+	content, ok := w.FileAtParentOf(head, "app.hcl")
 	if !ok {
-		t.Fatal("FileAtParent should find app.hcl at the parent commit")
+		t.Fatal("FileAtParentOf should find app.hcl at the parent commit")
 	}
 	if content != `job "app" { v = 1 }` {
 		t.Errorf("unexpected parent content: %q", content)
 	}
 
-	// A file that did not exist at the parent.
-	commitFiles(t, dir, repo, map[string]string{"new.hcl": `job "new" {}`}, "add new")
+	// An advancing HEAD must not change the answer for an earlier commit: the
+	// lookup is keyed off the named commit, not current HEAD.
+	commitFiles(t, dir, repo, map[string]string{"app.hcl": `job "app" { v = 3 }`}, "bump again")
 	w2 := newTestWatcher(&config.Config{RepoURL: dir, Branch: "main"}, nil)
 	if err := w2.Clone(context.Background()); err != nil {
 		t.Fatalf("Clone: %v", err)
 	}
-	if _, ok := w2.FileAtParent("new.hcl"); ok {
-		t.Error("FileAtParent should report ok=false for a file new at HEAD")
+	content, ok = w2.FileAtParentOf(head, "app.hcl") // same earlier commit
+	if !ok || content != `job "app" { v = 1 }` {
+		t.Errorf("parent of an earlier commit should be stable across HEAD advances, got %q ok=%v", content, ok)
+	}
+
+	// Unknown commit hash.
+	if _, ok := w2.FileAtParentOf("0000000000000000000000000000000000000000", "app.hcl"); ok {
+		t.Error("FileAtParentOf should report ok=false for an unknown commit")
 	}
 }
 
-func TestFileAtParent_RootCommit(t *testing.T) {
+func TestFileAtParentOf_FileNew(t *testing.T) {
+	dir, repo := makeDiskRepo(t, map[string]string{"app.hcl": `job "app" {}`})
+	commitFiles(t, dir, repo, map[string]string{"new.hcl": `job "new" {}`}, "add new")
+
+	w := newTestWatcher(&config.Config{RepoURL: dir, Branch: "main"}, nil)
+	if err := w.Clone(context.Background()); err != nil {
+		t.Fatalf("Clone: %v", err)
+	}
+	// new.hcl was created at HEAD; it did not exist at the parent.
+	if _, ok := w.FileAtParentOf(w.LastCommit(), "new.hcl"); ok {
+		t.Error("FileAtParentOf should report ok=false for a file new at the commit")
+	}
+}
+
+func TestFileAtParentOf_RootCommit(t *testing.T) {
 	dir, _ := makeDiskRepo(t, map[string]string{"app.hcl": `job "app" {}`})
 	w := newTestWatcher(&config.Config{RepoURL: dir, Branch: "main"}, nil)
 	if err := w.Clone(context.Background()); err != nil {
 		t.Fatalf("Clone: %v", err)
 	}
-	// HEAD is the root commit (makeDiskRepo makes a single commit): no parent.
-	if _, ok := w.FileAtParent("app.hcl"); ok {
-		t.Error("FileAtParent should report ok=false at the root commit")
+	// The single commit is the root: no parent.
+	if _, ok := w.FileAtParentOf(w.LastCommit(), "app.hcl"); ok {
+		t.Error("FileAtParentOf should report ok=false at the root commit")
 	}
 }
 
-func TestFileAtParent_NoRepo(t *testing.T) {
+func TestFileAtParentOf_NoRepo(t *testing.T) {
 	w := newTestWatcher(&config.Config{}, nil)
-	if _, ok := w.FileAtParent("app.hcl"); ok {
-		t.Error("FileAtParent should report ok=false before clone")
+	if _, ok := w.FileAtParentOf("deadbeef", "app.hcl"); ok {
+		t.Error("FileAtParentOf should report ok=false before clone")
 	}
 }
