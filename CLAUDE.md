@@ -55,8 +55,9 @@ deliberately not persisted — Git and Nomad hold all durable truth and a
 restart costs one diff cycle.
 
 The design proposals in `docs/proposals/` record the reasoning; read them
-before extending the apply side (deregister, checkpointing, Diun
-integration all remain unimplemented). `docs/prior-art.md` surveys the
+before extending the apply side (automatic rollback, checkpointing, and
+Diun integration remain unimplemented; the register and deregister paths
+have shipped). `docs/prior-art.md` surveys the
 existing tooling (nomad-gitops-operator, nomad-ops, Levant, Waypoint) and
 explains the mistakes nomad-botherer deliberately avoids.
 
