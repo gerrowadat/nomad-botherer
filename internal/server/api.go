@@ -213,7 +213,7 @@ const openAPISpec = `{
       "JobUpdate": {
         "type": "object",
         "properties": {
-          "update_id":              {"type": "string", "description": "<job_id>/<git_commit_short>; stable across restarts"},
+          "update_id":              {"type": "string", "description": "Stable across restarts. REGISTER/DEREGISTER: <job_id>/<git_commit_short>. REVERT: <job_id>/revert-<failed_version>."},
           "job_id":                 {"type": "string"},
           "hcl_file":               {"type": "string"},
           "git_commit":             {"type": "string"},

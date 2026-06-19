@@ -819,8 +819,11 @@ func (d *Differ) Check(hclFiles map[string]string, commit string) error {
 	// detect jobs running in Nomad that have no corresponding HCL file.
 	hclJobSet := make(map[string]struct{}, len(hclEntries))
 	selReasons := make(map[string]SelectionReason)
-	// metaByJob holds each managed job's meta for the rollback poll: the HCL
-	// meta when the job has an HCL file (Git is intent), else the live meta.
+	// metaByJob holds the HCL meta of each managed job that has an HCL file in
+	// the repo, used by the rollback poll. Active rollback is deliberately
+	// scoped to HCL-defined jobs: a job running in Nomad with no HCL is either
+	// unmanaged or an orphan leaving management, not something nomad-botherer
+	// drives applies for, so it is not a rollback candidate.
 	metaByJob := make(map[string]map[string]string)
 	var diffs []JobDiff
 	var candidates []*updateCandidate

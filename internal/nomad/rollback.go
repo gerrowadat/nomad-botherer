@@ -148,7 +148,7 @@ func (d *Differ) failedTagName(fingerprint string) string {
 }
 
 // parseFailedFingerprint recovers a spec fingerprint from a failed-version tag
-// name, or (",", false) if the tag is not one of ours.
+// name, or ("", false) if the tag is not one of ours.
 func (d *Differ) parseFailedFingerprint(tagName string) (string, bool) {
 	p := d.failedTagPrefix()
 	if d.managedMetaPrefix == "" || !strings.HasPrefix(tagName, p) {

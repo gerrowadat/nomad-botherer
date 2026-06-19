@@ -700,6 +700,25 @@ func TestLoadFromArgs_InvalidFlapGuardRejected(t *testing.T) {
 	}
 }
 
+func TestLoadFromArgs_TagModeRequiresMetaPrefix(t *testing.T) {
+	for _, k := range []string{"FLAP_GUARD", "MANAGED_META_PREFIX"} {
+		os.Unsetenv(k)
+	}
+	_, err := LoadFromArgs(newFS(), []string{
+		"--repo-url", "https://example.com/r.git",
+		"--flap-guard", "tag",
+		"--managed-meta-prefix", "",
+	})
+	if err == nil {
+		t.Error("--flap-guard=tag with an empty managed-meta-prefix should be rejected at config load")
+	}
+
+	// tag mode with the default (non-empty) prefix is fine.
+	if _, err := LoadFromArgs(newFS(), []string{"--repo-url", "https://example.com/r.git", "--flap-guard", "tag"}); err != nil {
+		t.Errorf("tag mode with the default prefix should be accepted, got %v", err)
+	}
+}
+
 func TestLoadFromArgs_MetaOnlyFlagDefaults(t *testing.T) {
 	for _, k := range []string{"APPLY_META_ONLY_CHANGES", "COUNT_META_ONLY_CHANGES"} {
 		os.Unsetenv(k)

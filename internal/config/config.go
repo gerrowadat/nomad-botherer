@@ -167,6 +167,14 @@ func LoadFromArgs(fs *flag.FlagSet, args []string) (*Config, error) {
 		return nil, fmt.Errorf("--flap-guard / FLAP_GUARD must be one of history, tag, off; got %q", c.FlapGuard)
 	}
 
+	// Tag mode builds failed-version tag names from the managed-meta prefix
+	// (<prefix>-failed-<fingerprint>) and recognises them by that prefix. With
+	// an empty prefix the tag name would start with "-failed-" and could never
+	// be recognised again, so durable blocking would silently not work.
+	if c.FlapGuard == "tag" && c.ManagedMetaPrefix == "" {
+		return nil, fmt.Errorf("--flap-guard=tag requires --managed-meta-prefix / MANAGED_META_PREFIX to be non-empty: failed-version tag names are derived from the prefix")
+	}
+
 	return c, nil
 }
 
