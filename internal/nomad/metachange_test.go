@@ -186,6 +186,38 @@ func TestMetaChange_PolicyTransitions(t *testing.T) {
 	})
 }
 
+func TestMetaChange_FlapGuardTransition(t *testing.T) {
+	h := newMetaChangeHarness(t, metaChangeCfg())
+	h.hclMeta = map[string]string{"gitops_managed": "true"}
+	h.check()
+	h.hclMeta = map[string]string{"gitops_managed": "true", "gitops_flap_guard": "off"}
+	h.check()
+
+	logs := h.logs.String()
+	if !strings.Contains(logs, "key=gitops_flap_guard") {
+		t.Fatalf("flap_guard change should be logged, got:\n%s", logs)
+	}
+	if !strings.Contains(logs, "flap-loop guard is disabled for this job") {
+		t.Errorf("flap_guard=off action missing, got:\n%s", logs)
+	}
+}
+
+func TestMetaChange_RollbackTransition(t *testing.T) {
+	h := newMetaChangeHarness(t, metaChangeCfg())
+	h.hclMeta = map[string]string{"gitops_managed": "true"}
+	h.check()
+	h.hclMeta = map[string]string{"gitops_managed": "true", "gitops_rollback": "true"}
+	h.check()
+
+	logs := h.logs.String()
+	if !strings.Contains(logs, "key=gitops_rollback") {
+		t.Fatalf("rollback change should be logged, got:\n%s", logs)
+	}
+	if !strings.Contains(logs, "active rollback is enabled") {
+		t.Errorf("rollback=true action missing, got:\n%s", logs)
+	}
+}
+
 func TestMetaChange_LiveSide_ManualRegisterLosesKeys(t *testing.T) {
 	h := newMetaChangeHarness(t, metaChangeCfg())
 	h.hclMeta = map[string]string{"gitops_managed": "true"}

@@ -24,6 +24,12 @@ type mockJobsClient struct {
 	listFn       func(q *nomadapi.QueryOptions) ([]*nomadapi.JobListStub, *nomadapi.QueryMeta, error)
 	registerFn   func(job *nomadapi.Job, opts *nomadapi.RegisterOptions, q *nomadapi.WriteOptions) (*nomadapi.JobRegisterResponse, *nomadapi.WriteMeta, error)
 	deregisterFn func(jobID string, purge bool, q *nomadapi.WriteOptions) (string, *nomadapi.WriteMeta, error)
+
+	versionsFn         func(jobID string, diffs bool, q *nomadapi.QueryOptions) ([]*nomadapi.Job, []*nomadapi.JobDiff, *nomadapi.QueryMeta, error)
+	deploymentsFn      func(jobID string, all bool, q *nomadapi.QueryOptions) ([]*nomadapi.Deployment, *nomadapi.QueryMeta, error)
+	latestDeploymentFn func(jobID string, q *nomadapi.QueryOptions) (*nomadapi.Deployment, *nomadapi.QueryMeta, error)
+	revertFn           func(jobID string, version uint64, enforcePriorVersion *uint64, q *nomadapi.WriteOptions, consulToken, vaultToken string) (*nomadapi.JobRegisterResponse, *nomadapi.WriteMeta, error)
+	tagVersionFn       func(jobID string, version uint64, name, description string, q *nomadapi.WriteOptions) (*nomadapi.WriteMeta, error)
 }
 
 func (m *mockJobsClient) ParseHCL(jobHCL string, normalize bool) (*nomadapi.Job, error) {
@@ -49,6 +55,36 @@ func (m *mockJobsClient) Deregister(jobID string, purge bool, q *nomadapi.WriteO
 		return "", nil, nil
 	}
 	return m.deregisterFn(jobID, purge, q)
+}
+func (m *mockJobsClient) Versions(jobID string, diffs bool, q *nomadapi.QueryOptions) ([]*nomadapi.Job, []*nomadapi.JobDiff, *nomadapi.QueryMeta, error) {
+	if m.versionsFn == nil {
+		return nil, nil, nil, nil
+	}
+	return m.versionsFn(jobID, diffs, q)
+}
+func (m *mockJobsClient) Deployments(jobID string, all bool, q *nomadapi.QueryOptions) ([]*nomadapi.Deployment, *nomadapi.QueryMeta, error) {
+	if m.deploymentsFn == nil {
+		return nil, nil, nil
+	}
+	return m.deploymentsFn(jobID, all, q)
+}
+func (m *mockJobsClient) LatestDeployment(jobID string, q *nomadapi.QueryOptions) (*nomadapi.Deployment, *nomadapi.QueryMeta, error) {
+	if m.latestDeploymentFn == nil {
+		return nil, nil, nil
+	}
+	return m.latestDeploymentFn(jobID, q)
+}
+func (m *mockJobsClient) Revert(jobID string, version uint64, enforcePriorVersion *uint64, q *nomadapi.WriteOptions, consulToken, vaultToken string) (*nomadapi.JobRegisterResponse, *nomadapi.WriteMeta, error) {
+	if m.revertFn == nil {
+		return &nomadapi.JobRegisterResponse{}, nil, nil
+	}
+	return m.revertFn(jobID, version, enforcePriorVersion, q, consulToken, vaultToken)
+}
+func (m *mockJobsClient) TagVersion(jobID string, version uint64, name, description string, q *nomadapi.WriteOptions) (*nomadapi.WriteMeta, error) {
+	if m.tagVersionFn == nil {
+		return nil, nil
+	}
+	return m.tagVersionFn(jobID, version, name, description, q)
 }
 
 // defaultMock returns a client where everything succeeds with no diffs.

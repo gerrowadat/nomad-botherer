@@ -184,7 +184,7 @@ const openAPISpec = `{
           "hcl_file":  {"type": "string"},
           "diff_type": {"type": "string", "enum": ["modified", "missing_from_nomad", "missing_from_hcl"]},
           "detail":    {"type": "string"},
-          "apply_action": {"type": "string", "description": "Disposition of this diff: whether it will be applied and, if not, why.", "enum": ["queued", "blocked_by_policy", "blocked_preexisting_drift", "blocked_creation_disabled", "skipped_meta_only", "observation_only", "queued_deregister", "deregister_pending_grace", "no_actionable_change"]}
+          "apply_action": {"type": "string", "description": "Disposition of this diff: whether it will be applied and, if not, why.", "enum": ["queued", "blocked_by_policy", "blocked_preexisting_drift", "blocked_creation_disabled", "skipped_meta_only", "observation_only", "queued_deregister", "deregister_pending_grace", "no_actionable_change", "blocked_known_failed"]}
         }
       },
       "SelectedJob": {
@@ -217,14 +217,16 @@ const openAPISpec = `{
           "job_id":                 {"type": "string"},
           "hcl_file":               {"type": "string"},
           "git_commit":             {"type": "string"},
-          "operation":              {"type": "string", "enum": ["REGISTER", "DEREGISTER"]},
+          "operation":              {"type": "string", "enum": ["REGISTER", "DEREGISTER", "REVERT"]},
           "status":                 {"type": "string", "enum": ["PENDING", "IN_PROGRESS", "SUCCEEDED", "FAILED", "SUPERSEDED"]},
           "policy":                 {"type": "string", "enum": ["full", "image-only", "none"]},
           "nomad_job_modify_index": {"type": "integer", "description": "CAS token captured at detection time; 0 = job did not exist"},
           "nomad_raft_index":       {"type": "integer"},
           "detected_at":            {"type": "string", "format": "date-time"},
           "applied_at":             {"type": "string", "format": "date-time"},
-          "error":                  {"type": "string"}
+          "error":                  {"type": "string"},
+          "revert_to_version":      {"type": "integer", "description": "REVERT only: the stable job version rolled back to"},
+          "revert_from_version":    {"type": "integer", "description": "REVERT only: the failed version used as the CAS guard"}
         }
       },
       "UpdatesResponse": {

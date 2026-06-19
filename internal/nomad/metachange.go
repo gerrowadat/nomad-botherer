@@ -114,6 +114,10 @@ func (d *Differ) metaChangeAction(jobID, source, key, oldV, newV string, hasNew 
 		return d.managedTransitionAction(jobID, source, newV, hasNew)
 	case d.managedMetaPrefix + "_update_policy":
 		return d.policyTransitionAction(source, newV, hasNew)
+	case d.managedMetaPrefix + "_flap_guard":
+		return d.flapGuardTransitionAction(source, newV, hasNew)
+	case d.managedMetaPrefix + "_rollback":
+		return d.rollbackTransitionAction(source, newV, hasNew)
 	default:
 		return "key is not one nomad-botherer understands; no behaviour change (see meta-key issue warnings)"
 	}
@@ -173,6 +177,63 @@ func (d *Differ) policyTransitionAction(source, newV string, hasNew bool) string
 	note := ""
 	if source == "nomad" {
 		note = " (note: policy is read from the HCL side; the live job's value does not drive behaviour)"
+	}
+	return qualifier + behaviour + note
+}
+
+// flapGuardTransitionAction explains the consequence of a flap-guard change.
+func (d *Differ) flapGuardTransitionAction(source, newV string, hasNew bool) string {
+	mode := d.flapGuard
+	qualifier := ""
+	switch {
+	case !hasNew:
+		qualifier = fmt.Sprintf("key removed; falling back to the --flap-guard default %q: ", d.flapGuard)
+	case validFlapGuardValue(newV):
+		mode = newV
+	default:
+		qualifier = fmt.Sprintf("value %q is invalid; falling back to the --flap-guard default %q: ", newV, d.flapGuard)
+	}
+
+	var behaviour string
+	switch mode {
+	case "off":
+		behaviour = "the flap-loop guard is disabled for this job: a spec a recent Nomad version already failed to deploy may be re-applied"
+	case "tag":
+		behaviour = "a failed deployment's version will be tagged so the guard survives version GC; a re-applied spec matching a known-failed version is held"
+	default:
+		behaviour = "a re-applied spec matching a recent failed deployment version is held until Git moves on (version history is ephemeral, lost when Nomad GCs old versions)"
+	}
+
+	note := ""
+	if source == "nomad" {
+		note = " (note: flap-guard is read from the HCL side; the live job's value does not drive behaviour)"
+	}
+	return qualifier + behaviour + note
+}
+
+// rollbackTransitionAction explains the consequence of a rollback override change.
+func (d *Differ) rollbackTransitionAction(source, newV string, hasNew bool) string {
+	enabled := d.allowRollback
+	qualifier := ""
+	switch {
+	case !hasNew:
+		qualifier = fmt.Sprintf("key removed; falling back to the --allow-rollback default (%v): ", d.allowRollback)
+	case validManagedValue(newV):
+		enabled = newV == "true"
+	default:
+		qualifier = fmt.Sprintf("value %q is invalid; falling back to the --allow-rollback default (%v): ", newV, d.allowRollback)
+	}
+
+	var behaviour string
+	if enabled {
+		behaviour = "active rollback is enabled: a failed deployment on this job reverts to the last stable version (unless the update stanza sets auto_revert, in which case Nomad's own rollback wins)"
+	} else {
+		behaviour = "active rollback is disabled: a failed deployment is surfaced but not reverted by nomad-botherer (Nomad's auto_revert, if set, still applies)"
+	}
+
+	note := ""
+	if source == "nomad" {
+		note = " (note: rollback override is read from the HCL side; the live job's value does not drive behaviour)"
 	}
 	return qualifier + behaviour + note
 }

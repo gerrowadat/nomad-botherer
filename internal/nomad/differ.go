@@ -102,6 +102,11 @@ const (
 	ApplyActionDeregisterGrace ApplyAction = "deregister_pending_grace"
 	// ApplyActionNoChange means the only diff is autoscaler-owned churn.
 	ApplyActionNoChange ApplyAction = "no_actionable_change"
+	// ApplyActionKnownFailed means the flap-loop guard is holding the apply:
+	// the HCL spec matches a recent Nomad job version whose deployment failed,
+	// so re-applying it would re-enter a known failure. Released when Git moves
+	// to a spec that has not failed.
+	ApplyActionKnownFailed ApplyAction = "blocked_known_failed"
 )
 
 // Describe returns a human-readable explanation for display.
@@ -125,6 +130,8 @@ func (a ApplyAction) Describe() string {
 		return "will deregister after the grace period (removed from the repo)"
 	case ApplyActionNoChange:
 		return "no actionable change (autoscaler-owned)"
+	case ApplyActionKnownFailed:
+		return "not applied: this spec matches a recent failed deployment (flap-loop guard); waiting for a fix in Git"
 	default:
 		return string(a)
 	}
@@ -162,6 +169,18 @@ type NomadJobsClient interface {
 	List(q *nomadapi.QueryOptions) ([]*nomadapi.JobListStub, *nomadapi.QueryMeta, error)
 	RegisterOpts(job *nomadapi.Job, opts *nomadapi.RegisterOptions, q *nomadapi.WriteOptions) (*nomadapi.JobRegisterResponse, *nomadapi.WriteMeta, error)
 	Deregister(jobID string, purge bool, q *nomadapi.WriteOptions) (string, *nomadapi.WriteMeta, error)
+	// Versions returns a job's retained version history (most recent first).
+	Versions(jobID string, diffs bool, q *nomadapi.QueryOptions) ([]*nomadapi.Job, []*nomadapi.JobDiff, *nomadapi.QueryMeta, error)
+	// Deployments returns a job's deployments (most recent first).
+	Deployments(jobID string, all bool, q *nomadapi.QueryOptions) ([]*nomadapi.Deployment, *nomadapi.QueryMeta, error)
+	// LatestDeployment returns the job's most recent deployment, or nil.
+	LatestDeployment(jobID string, q *nomadapi.QueryOptions) (*nomadapi.Deployment, *nomadapi.QueryMeta, error)
+	// Revert rolls a job back to a prior version. enforcePriorVersion, when
+	// non-nil, is a CAS guard: the revert only lands if the job is still at that
+	// version.
+	Revert(jobID string, version uint64, enforcePriorVersion *uint64, q *nomadapi.WriteOptions, consulToken, vaultToken string) (*nomadapi.JobRegisterResponse, *nomadapi.WriteMeta, error)
+	// TagVersion attaches a durable name to a job version so it survives GC.
+	TagVersion(jobID string, version uint64, name, description string, q *nomadapi.WriteOptions) (*nomadapi.WriteMeta, error)
 }
 
 // Differ runs periodic diff checks and stores the latest results.
@@ -197,6 +216,13 @@ type Differ struct {
 	enableDeregister bool
 	deregisterPurge  bool
 	deregisterGrace  time.Duration
+	// flapGuard is the default flap-loop guard mode (history, tag, or off),
+	// from --flap-guard. Per-job overridable via the <prefix>_flap_guard meta
+	// key. allowRollback is the default for active rollback, from
+	// --allow-rollback, overridable via <prefix>_rollback. Both only apply to
+	// deployment-producing jobs.
+	flapGuard     string
+	allowRollback bool
 	// history answers whether the managed tag was present before HEAD, used to
 	// detect pre-existing drift. nil disables the check.
 	history HistorySource
@@ -213,6 +239,11 @@ type Differ struct {
 	// (job, key, value, issue) is logged once per process. The counter
 	// metric is not deduped.
 	metaIssuesLogged sync.Map
+
+	// rollbackLogged dedups the auto_revert-clash WARN: each job is logged at
+	// most once per process when active rollback stands down in favour of
+	// Nomad's own auto_revert. The metric is not deduped.
+	rollbackLogged sync.Map
 
 	// prevMeta holds the previous cycle's prefix-key snapshots per
 	// (source, job), used to notice and log meta-key transitions. prevManaged
@@ -252,6 +283,9 @@ type Differ struct {
 	metaOnlyDiffs                  *prometheus.CounterVec
 	updatesBlockedExistingDrift    *prometheus.CounterVec
 	jobsLeftManagement             *prometheus.CounterVec
+	updatesBlockedKnownFailed      *prometheus.CounterVec
+	rollbacks                      *prometheus.CounterVec
+	failedVersionsTagged           *prometheus.CounterVec
 }
 
 // newDifferBase constructs a Differ from config with metrics registered into reg.
@@ -263,6 +297,12 @@ func newDifferBase(jobs NomadJobsClient, cfg *config.Config, reg prometheus.Regi
 	applyInterval := cfg.ApplyInterval
 	if applyInterval <= 0 {
 		applyInterval = 10 * time.Second
+	}
+	flapGuard := cfg.FlapGuard
+	if !validFlapGuardValue(flapGuard) {
+		// Empty or invalid (e.g. a Config built directly in a test): fall back
+		// to the documented default rather than silently disabling the guard.
+		flapGuard = "history"
 	}
 
 	var managedKeyRe *regexp.Regexp
@@ -289,6 +329,8 @@ func newDifferBase(jobs NomadJobsClient, cfg *config.Config, reg prometheus.Regi
 		deregisterPurge:      cfg.DeregisterPurge,
 		deregisterGrace:      cfg.DeregisterGrace,
 		managedKeyRe:         managedKeyRe,
+		flapGuard:            flapGuard,
+		allowRollback:        cfg.AllowRollback,
 		applyInterval:        applyInterval,
 		updateQueue:       NewUpdateQueue(),
 		applyCh:           make(chan struct{}, 1),
@@ -377,6 +419,18 @@ func newDifferBase(jobs NomadJobsClient, cfg *config.Config, reg prometheus.Regi
 			Name: "nomad_botherer_jobs_left_management_total",
 			Help: "Managed jobs that left GitOps management, by reason: tag_removed (gitops_managed dropped from HCL) or removed_from_repo (HCL file deleted or job renamed). Logged once per transition.",
 		}, []string{"job", "reason"}),
+		updatesBlockedKnownFailed: f.NewCounterVec(prometheus.CounterOpts{
+			Name: "nomad_botherer_updates_blocked_known_failed_total",
+			Help: "Registrations withheld by the flap-loop guard because the HCL spec matches a recent Nomad job version whose deployment failed. The signal that a job is stuck on a known-bad commit awaiting a fix in Git.",
+		}, []string{"job"}),
+		rollbacks: f.NewCounterVec(prometheus.CounterOpts{
+			Name: "nomad_botherer_rollbacks_total",
+			Help: "Active rollback outcomes for deployment-producing jobs without auto_revert, by result: queued (a revert was enqueued), deferred_auto_revert (stood down because the job's update stanza sets auto_revert), no_stable_version (no stable version to revert to).",
+		}, []string{"job", "result"}),
+		failedVersionsTagged: f.NewCounterVec(prometheus.CounterOpts{
+			Name: "nomad_botherer_failed_versions_tagged_total",
+			Help: "Failed job versions tagged in Nomad by the flap-guard tag mode (--flap-guard=tag) so the block survives version GC.",
+		}, []string{"job"}),
 	}
 
 	// Pre-populate Vec metrics for all finite label values so they appear in
@@ -384,12 +438,13 @@ func newDifferBase(jobs NomadJobsClient, cfg *config.Config, reg prometheus.Regi
 	for _, src := range []string{"hcl", "nomad"} {
 		d.jobsSkippedBySel.WithLabelValues(src)
 	}
-	for _, op := range []string{"list", "info", "plan", "register", "deregister"} {
+	for _, op := range []string{"list", "info", "plan", "register", "deregister", "versions", "deployments", "deployment", "revert", "tag"} {
 		d.nomadAPIErrors.WithLabelValues(op)
 	}
 	for _, st := range []JobUpdateStatus{JobUpdateStatusSucceeded, JobUpdateStatusFailed, JobUpdateStatusSuperseded} {
 		d.jobUpdatesTotal.WithLabelValues(string(JobUpdateOperationRegister), string(st))
 		d.jobUpdatesTotal.WithLabelValues(string(JobUpdateOperationDeregister), string(st))
+		d.jobUpdatesTotal.WithLabelValues(string(JobUpdateOperationRevert), string(st))
 	}
 	for _, dt := range []string{string(DiffTypeModified), string(DiffTypeMissingFromNomad), string(DiffTypeMissingFromHCL)} {
 		d.driftedJobs.WithLabelValues(dt)
@@ -764,6 +819,9 @@ func (d *Differ) Check(hclFiles map[string]string, commit string) error {
 	// detect jobs running in Nomad that have no corresponding HCL file.
 	hclJobSet := make(map[string]struct{}, len(hclEntries))
 	selReasons := make(map[string]SelectionReason)
+	// metaByJob holds each managed job's meta for the rollback poll: the HCL
+	// meta when the job has an HCL file (Git is intent), else the live meta.
+	metaByJob := make(map[string]map[string]string)
 	var diffs []JobDiff
 	var candidates []*updateCandidate
 
@@ -774,10 +832,11 @@ func (d *Differ) Check(hclFiles map[string]string, commit string) error {
 		}
 		selReasons[jobID] = mergeSelectionReason(selReasons[jobID], reason)
 		hclJobSet[jobID] = struct{}{}
+		metaByJob[jobID] = entry.job.Meta
 		if cand != nil {
 			// Decide the disposition once; it is recorded on the diff (for the
 			// API/console) and drives whether the update is enqueued below.
-			cand.action = d.decideApplyAction(cand, commit)
+			cand.action = d.decideApplyAction(cand, commit, q)
 		}
 		if diff != nil {
 			metaOnly := cand != nil && cand.class == DiffClassManagedMetaOnly
@@ -884,6 +943,12 @@ func (d *Differ) Check(hclFiles map[string]string, commit string) error {
 	if enqueued > 0 {
 		d.notifyApplier()
 	}
+
+	// Active rollback poll: for managed deployment-producing jobs that have
+	// rollback enabled, revert a failed deployment to the last stable version
+	// (unless the job uses auto_revert, where Nomad wins). Cheap and skipped
+	// entirely when no managed job opts in.
+	d.checkRollbacks(metaByJob, q, raftIndex)
 
 	slog.Info("Diff check complete", "diffs", len(diffs), "updates_enqueued", enqueued, "commit", commit)
 	return nil
@@ -1016,7 +1081,7 @@ func (d *Differ) orphanGraceElapsed(jobID string) bool {
 // reason via metrics/logs. It does not enqueue anything; the caller enqueues
 // when the action is ApplyActionQueued. The gates are ordered most-conservative
 // first so the surfaced reason is the primary one.
-func (d *Differ) decideApplyAction(c *updateCandidate, commit string) ApplyAction {
+func (d *Differ) decideApplyAction(c *updateCandidate, commit string, q *nomadapi.QueryOptions) ApplyAction {
 	if c.class == DiffClassNone && !c.isCreation {
 		// Everything in the diff is autoscaler-owned Count/Scaling churn;
 		// Git has nothing to apply. The diff stays visible as an observation.
@@ -1061,6 +1126,18 @@ func (d *Differ) decideApplyAction(c *updateCandidate, commit string) ApplyActio
 		slog.Info("Job creation blocked: --enable-job-creation is off", "job", c.jobID)
 		d.updatesBlockedCreationDisabled.WithLabelValues(c.jobID).Inc()
 		return ApplyActionCreationBlocked
+	}
+
+	// Flap-loop guard: hold a re-apply of a spec that a recent deployment
+	// already failed (apply→fail→revert→re-apply). Only meaningful for an
+	// existing job; a first registration has no prior failed version to match.
+	// Released automatically when Git moves to a spec that has not failed.
+	if !c.isCreation {
+		if mode := d.effectiveFlapGuard(c.job.Meta); mode != "off" && d.flapGuardBlocks(c, mode, q) {
+			slog.Info("Flap-guard: holding re-apply of a spec a recent deployment already failed; waiting for a fix in Git", "job", c.jobID)
+			d.updatesBlockedKnownFailed.WithLabelValues(c.jobID).Inc()
+			return ApplyActionKnownFailed
+		}
 	}
 
 	return ApplyActionQueued

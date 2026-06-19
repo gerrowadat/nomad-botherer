@@ -1,12 +1,38 @@
-# Proposal: automatic rollback when a change goes badly
+# Design: automatic rollback when a change goes badly
 
-**Status**: draft (research)
-**Date**: 2026-06-17
+**Status**: implemented — Unreleased. Phase 1 (the flap-loop guard, Approach A
+and the tag variant Approach B) and Phase 2 (optional active rollback) both
+shipped. See the CHANGELOG and the README "Rollback" section.
+**Date**: 2026-06-17 (proposed, as research) · implemented 2026-06-19
 
-Related proposals: [gitops-job-updates.md](../design/gitops-job-updates.md) (the apply
+> This records the research and the decisions behind the shipped rollback
+> handling. Where the implementation diverged from this document it is noted
+> inline below. The main divergences:
+>
+> - **Flags were renamed and consolidated.** The sketch proposed
+>   `--block-known-failed` (bool), `--enable-rollback`, and
+>   `--tag-failed-versions`. As shipped these are `--flap-guard=history|tag|off`
+>   (one flag covering Approach A, Approach B, and disabling) and
+>   `--allow-rollback`, each with a per-job meta override (`<prefix>_flap_guard`,
+>   `<prefix>_rollback`). The default flap-guard mode is `history`.
+> - **Active rollback is poll-based, not a long-running watch.** Rather than
+>   moving an update into a watch state and blocking on `LatestDeployment` to a
+>   terminal status, each diff cycle checks `LatestDeployment`; a `failed`
+>   status enqueues a `REVERT`. This is restart-safe and stateless by
+>   construction and sidesteps the dispatched-executor question for now, so the
+>   proposed `--rollback-watch-timeout` was dropped (Nomad's `progress_deadline`
+>   decides failure).
+> - **Scope was narrowed to deployment-producing jobs.** Failure is keyed on a
+>   `failed` deployment status, so batch/system/no-health-check jobs (no
+>   deployment) get neither the guard nor active rollback. The open question
+>   about defining failure for batch jobs is deferred, not answered.
+> - **`ROLLED_BACK` was not added as a status.** A revert is a `REVERT`-operation
+>   `JobUpdate` that reaches the normal `SUCCEEDED`/`FAILED` terminal states.
+
+Related documents: [gitops-job-updates.md](gitops-job-updates.md) (the apply
 path; "Rollback" open question and the dispatched-executor note),
-[change-checkpointing.md](change-checkpointing.md) (the no-external-database /
-state-lives-in-Git-and-Nomad principle), [update-policies.md](../design/update-policies.md)
+[change-checkpointing.md](../proposals/change-checkpointing.md) (the no-external-database /
+state-lives-in-Git-and-Nomad principle), [update-policies.md](update-policies.md)
 (per-job control over what is applied).
 
 ## Background

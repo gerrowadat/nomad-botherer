@@ -334,6 +334,8 @@ Every flag has a corresponding environment variable. Environment variables are r
 | `--enable-deregister` | `ENABLE_DEREGISTER` | `false` | Deregister jobs removed from the repo entirely (HCL file deleted or job renamed) while still running. Off by default. Only acts on a live job carrying `gitops_managed=true` whose effective policy is `full`, and only after it has been orphaned for `--deregister-grace`. Removing only the tag (job still in the repo) never deregisters. See [Deregistration](#deregistration-jobs-removed-from-the-repo). |
 | `--deregister-purge` | `DEREGISTER_PURGE` | `false` | Purge the job from Nomad's state immediately instead of a graceful stop (queryable, GC'd later). |
 | `--deregister-grace` | `DEREGISTER_GRACE` | `5m` | How long a job must be continuously orphaned before being deregistered. Absorbs transient renames and mid-edit commits. |
+| `--flap-guard` | `FLAP_GUARD` | `history` | How to avoid re-applying a spec a recent deployment already failed (the apply→fail→revert→re-apply loop): `history` (compare spec fingerprints against Nomad's version history; ephemeral, lost when Nomad GCs old versions), `tag` (additionally tag the failed version so the block survives GC), or `off`. Per-job overridable via `<prefix>_flap_guard`. Only applies to deployment-producing jobs. See [Rollback](#rollback-recovering-from-a-bad-change). |
+| `--allow-rollback` | `ALLOW_ROLLBACK` | `false` | Enable active rollback: for managed deployment-producing jobs whose `update` stanza does not set `auto_revert`, revert to the last stable version when a deployment fails. Off by default. Per-job overridable via `<prefix>_rollback`. Where the job sets `auto_revert`, Nomad's own rollback wins. See [Rollback](#rollback-recovering-from-a-bad-change). |
 | `--job-selector-glob` | `JOB_SELECTOR_GLOB` | *(empty — no glob)* | Glob pattern selecting jobs to watch by name (e.g. `myprefix-*`, `*` for all). Combined with `--managed-meta-prefix` as a union. |
 | `--managed-meta-prefix` | `MANAGED_META_PREFIX` | `gitops` | Prefix for job meta keys used by nomad-botherer. With prefix `gitops`, the key `gitops_managed = "true"` opts a job in. Empty disables meta-based selection. |
 | `--max-git-staleness` | `MAX_GIT_STALENESS` | `0` (disabled) | If the git repo has not been successfully fetched within this window, force an immediate fetch. Set to `0` to disable. E.g. `--max-git-staleness=30m` |
@@ -558,6 +560,104 @@ documented in the OpenAPI spec. Values:
 | `queued_deregister` | The job was removed from the repo and will be deregistered. |
 | `deregister_pending_grace` | Removed from the repo; deregistration is waiting out `--deregister-grace`. |
 | `no_actionable_change` | The only diff is autoscaler-owned Count/Scaling churn. |
+| `blocked_known_failed` | The flap-loop guard is holding the apply: this spec matches a recent deployment that failed. Released when Git moves to a spec that has not failed. See [Rollback](#rollback-recovering-from-a-bad-change). |
+
+---
+
+## Rollback: recovering from a bad change
+
+When nomad-botherer applies drift it re-registers the job from HCL. If that
+change is bad — a new image crash-loops, a config error fails health checks —
+something has to stop the obvious failure mode: apply commit `C`, the
+deployment fails, the job is reverted to the prior version, the next diff cycle
+sees Git still wants `C`, re-applies it, it fails again, forever.
+
+Two independent features address this. Both only apply to **deployment-producing
+jobs** — service jobs with an `update` stanza and real health checks, which is
+what makes Nomad create a *deployment* whose success or failure is observable.
+Batch, system, and no-health-check jobs produce no deployment, so neither
+feature engages for them.
+
+### Best practice: let Nomad do the rollback
+
+The supported, most reliable way to get automatic rollback is to set it in the
+job's own HCL:
+
+```hcl
+job "api" {
+  meta { gitops_managed = "true" }
+  group "web" {
+    update {
+      auto_revert      = true
+      health_check     = "checks"
+      healthy_deadline = "5m"
+    }
+    # ... tasks with service checks ...
+  }
+}
+```
+
+With `auto_revert = true` and real health checks, **Nomad** watches the
+rollout, fails the deployment if allocations do not become healthy, and reverts
+to the last stable version — in-cluster, surviving any nomad-botherer restart,
+using the same machinery `nomad job run` already relies on. nomad-botherer
+stays out of the way. This is the gold standard; prefer it.
+
+nomad-botherer's job in this case is only to *not fight the revert* — that is
+the flap-loop guard, on by default.
+
+### The flap-loop guard (`--flap-guard`, default `history`)
+
+After a failed deployment of spec `S` is reverted (by Nomad's `auto_revert` or
+by active rollback below), the live job is back at the prior version while Git
+still wants `S`. The next cycle sees that as drift and would re-register `S`.
+The flap-guard prevents it: before applying, it asks Nomad's own version
+history *"has a recent deployment of this exact spec already failed?"* If yes,
+the apply is withheld and surfaced as `blocked_known_failed`.
+
+The guard keys on the **spec**, not the commit, so it releases automatically the
+instant Git moves to a spec that has not failed — a fix commit, or a revert in
+Git. It holds no state of its own: the failed attempt is recorded by Nomad as a
+non-stable version.
+
+| Mode | Behaviour | Trade-off |
+|---|---|---|
+| `history` (default) | Compares the HCL spec against Nomad's retained version history each cycle. | Read-only, no state written. Bounded by Nomad's version GC (`job_gc_threshold`): once the failed version is GC'd, the bad spec is retried **at most once more**, fails, and the guard re-engages. Degrades to "retry at most once per GC window", never a tight loop. |
+| `tag` | As `history`, but also tags the failed version (`<prefix>-failed-<fingerprint>`) so the block survives GC. | Durable across any time horizon and restarts. The cost: nomad-botherer writes version tags into Nomad (a Nomad-native write, not a job-meta write, so no meta-drift) and becomes responsible for that state. A version carries at most one tag, so an already-tagged version is left alone. |
+| `off` | The guard is disabled. | A known-bad spec can loop. Only sensible per-job, via the meta key, for a job where you accept the risk. |
+
+Per job, override with the `<prefix>_flap_guard` meta key (`history`, `tag`, or
+`off`).
+
+Spec comparison is best-effort: server-side defaulting can make a genuinely
+identical spec fingerprint differently, in which case the guard *misses* and the
+bad spec is retried once more and caught again. That degradation is one-way and
+safe — a *false block* of a good change would need a SHA-256 collision.
+
+### Active rollback (`--allow-rollback`, default off)
+
+For jobs that did **not** set `auto_revert` — and for operators who want
+nomad-botherer to centralise the behaviour — active rollback makes
+nomad-botherer do the revert itself. Each diff cycle it checks the latest
+deployment of each rollback-enabled job; if it has **failed**, it reverts the
+job to its last stable version with `Jobs.Revert`, CAS-guarded on the failed
+version so a concurrent human change is never stomped.
+
+This is off by default and is the heavier, riskier path: it duplicates
+machinery Nomad already has for the `auto_revert` case. Prefer `auto_revert`.
+
+- **`auto_revert` always wins.** If a rollback-enabled job's `update` stanza
+  also sets `auto_revert`, nomad-botherer stands down and lets Nomad revert,
+  logging the clash once. (Even if that check were bypassed, the CAS guard would
+  reject the redundant revert.)
+- Enable per job with `<prefix>_rollback = "true"` (or disable a job while the
+  global flag is on with `"false"`).
+- No deployment to revert to a stable version below the failed one → nothing is
+  done; surfaced via the `rollbacks_total{result="no_stable_version"}` metric.
+
+A revert is recorded in the update queue as a `REVERT` operation (visible on
+`/api/v1/updates`), and the flap-guard then prevents re-applying the same bad
+spec until Git is fixed.
 
 ---
 
@@ -693,7 +793,7 @@ These counters and timestamps describe the diff check loop itself — how often 
 | `nomad_botherer_diff_checks_total` | Counter | — | Total diff checks run since startup. Use `rate()` to confirm the loop is running at the expected frequency. |
 | `nomad_botherer_diff_checks_skipped_total` | Counter | — | Checks skipped because neither the Nomad Raft index nor the git commit changed since the last run. A high skip rate is normal and indicates the optimisation is working. |
 | `nomad_botherer_last_check_timestamp_seconds` | Gauge | — | Unix timestamp of the most recent completed diff check. Alert when `time() - metric` exceeds 2× `--diff-interval` to catch a stuck check loop. |
-| `nomad_botherer_nomad_api_errors_total` | Counter | `op` (`info`, `plan`, `list`) | Nomad API call failures by operation. `info` = job lookup, `plan` = drift plan, `list` = listing all jobs. A rising count means drift results may be incomplete for that operation. |
+| `nomad_botherer_nomad_api_errors_total` | Counter | `op` (`info`, `plan`, `list`, `register`, `deregister`, `versions`, `deployments`, `deployment`, `revert`, `tag`) | Nomad API call failures by operation. `info` = job lookup, `plan` = drift plan, `list` = listing all jobs, `register`/`deregister`/`revert` = apply-side writes, `versions`/`deployments`/`deployment` = rollback and flap-guard reads, `tag` = flap-guard version tagging. A rising count means results may be incomplete for that operation. |
 | `nomad_botherer_hcl_parse_errors_total` | Counter | — | HCL files that failed to parse via the Nomad API. These files are skipped; the rest of the check continues. |
 | `nomad_botherer_hcl_non_job_files_skipped_total` | Counter | — | HCL files that were skipped because they contain no `job` stanza (e.g. ACL policies, volumes). Expected and normal; a rising rate may indicate `--hcl-dir` is set too broadly. |
 | `nomad_botherer_jobs_skipped_by_selector_total` | Counter | `source` (`hcl`, `nomad`) | Jobs skipped because they did not match the selection criteria (glob or managed meta key), by where they were seen. Expected on a shared cluster with unmanaged jobs. |
@@ -708,6 +808,10 @@ These counters and timestamps describe the diff check loop itself — how often 
 | `nomad_botherer_updates_blocked_preexisting_total` | Counter | `job` | Updates not enqueued because the drift pre-existed the job entering scope (opt-in via meta tag while running). Enable applying it with `--apply-existing-drift`. |
 | `nomad_botherer_jobs_left_management_total` | Counter | `job`, `reason` | Managed jobs that left GitOps management, by reason: `tag_removed` (the managed tag was dropped from HCL) or `removed_from_repo` (HCL file deleted or job renamed). Counted once per transition. |
 | `nomad_botherer_job_updates_total` (operation=`DEREGISTER`) | Counter | `operation`, `status` | Deregistrations reaching a terminal state. See [Deregistration](#deregistration-jobs-removed-from-the-repo). |
+| `nomad_botherer_updates_blocked_known_failed_total` | Counter | `job` | Registrations withheld by the flap-loop guard because the spec matches a recent failed deployment. A persistent non-zero value means a job is stuck on a known-bad commit awaiting a fix in Git. See [Rollback](#rollback-recovering-from-a-bad-change). |
+| `nomad_botherer_rollbacks_total` | Counter | `job`, `result` | Active-rollback outcomes: `queued` (a revert was enqueued), `deferred_auto_revert` (stood down because the job sets `auto_revert`), `no_stable_version` (no earlier stable version to revert to). |
+| `nomad_botherer_failed_versions_tagged_total` | Counter | `job` | Failed versions tagged by `--flap-guard=tag` so the block survives Nomad's version GC. |
+| `nomad_botherer_job_updates_total` (operation=`REVERT`) | Counter | `operation`, `status` | Active rollbacks reaching a terminal state. See [Rollback](#rollback-recovering-from-a-bad-change). |
 
 #### Git tracking
 
