@@ -57,6 +57,8 @@ func TestMetaCheck_KnownKeyBadValue_Flagged(t *testing.T) {
 		"managed wrong case":   {"gitops_managed": "True"},
 		"managed wrong word":   {"gitops_managed": "yes"},
 		"policy unknown value": {"gitops_update_policy": "everything"},
+		"flap_guard bad value": {"gitops_flap_guard": "sometimes"},
+		"rollback bad value":   {"gitops_rollback": "yes"},
 	}
 	for name, meta := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -75,6 +77,10 @@ func TestMetaCheck_ValidMeta_NotFlagged(t *testing.T) {
 		"explicit opt out": {"gitops_managed": "false"},
 		"policy none":      {"gitops_update_policy": "none"},
 		"policy full":      {"gitops_update_policy": "full"},
+		"flap_guard tag":   {"gitops_flap_guard": "tag"},
+		"flap_guard off":   {"gitops_flap_guard": "off"},
+		"rollback true":    {"gitops_rollback": "true"},
+		"rollback false":   {"gitops_rollback": "false"},
 		"unrelated keys":   {"team": "infra", "gitopsish_thing": "x", "mygitops_managed": "true"},
 		"no meta":          nil,
 	}

@@ -60,6 +60,24 @@ type Config struct {
 	DeregisterPurge  bool
 	DeregisterGrace  time.Duration
 
+	// FlapGuard controls how nomad-botherer avoids re-applying a job spec that
+	// a recent Nomad job version already failed to deploy (the
+	// apply→fail→revert→re-apply loop). One of: history (Approach A: compare
+	// spec fingerprints against Nomad's in-cluster version history, ephemeral
+	// and GC-bounded), tag (Approach B: additionally tag the failed version so
+	// the block survives version GC), or off (disabled). Per-job overridable
+	// via the <prefix>_flap_guard meta key. Only applies to deployment-producing
+	// jobs (service jobs with an update stanza and health checks).
+	FlapGuard string
+
+	// AllowRollback enables active rollback: for managed deployment-producing
+	// jobs whose update stanza does not set auto_revert, nomad-botherer reverts
+	// the job to its last stable version when a deployment fails. Off by
+	// default. Per-job overridable via the <prefix>_rollback meta key. Where a
+	// job's update stanza sets auto_revert=true, Nomad's own rollback always
+	// wins and nomad-botherer stands down.
+	AllowRollback bool
+
 	// Job selection. Git is always the source of truth for nomad-botherer's
 	// own meta keys: when a job has an HCL file in the repo, that file alone
 	// decides selection and policy. There is deliberately no flag to invert
@@ -115,6 +133,8 @@ func LoadFromArgs(fs *flag.FlagSet, args []string) (*Config, error) {
 	fs.BoolVar(&c.EnableDeregister, "enable-deregister", envBoolOrDefault("ENABLE_DEREGISTER", false), "Deregister jobs that were removed from the repo entirely (HCL file deleted or job renamed) while still running in Nomad. Off by default. Only ever acts on a job carrying gitops_managed=true in its live meta whose effective update policy is full, and only after it has been continuously orphaned for --deregister-grace. Removing only the gitops_managed tag (with the job still in the repo) never deregisters — it just stops management.")
 	fs.BoolVar(&c.DeregisterPurge, "deregister-purge", envBoolOrDefault("DEREGISTER_PURGE", false), "When deregistering, purge the job from Nomad's state immediately instead of a graceful stop (which leaves it queryable and garbage-collected later). Off by default.")
 	fs.DurationVar(&c.DeregisterGrace, "deregister-grace", envDurationOrDefault("DEREGISTER_GRACE", 5*time.Minute), "How long a job must be continuously orphaned (running in Nomad, removed from the repo) before it is deregistered. Absorbs transient renames and mid-edit commits.")
+	fs.StringVar(&c.FlapGuard, "flap-guard", envOrDefault("FLAP_GUARD", "history"), "How to avoid re-applying a spec a recent Nomad job version already failed to deploy (the apply/fail/revert/re-apply loop): history (compare spec fingerprints against Nomad's version history; ephemeral, lost when Nomad GCs old versions), tag (additionally tag the failed version so the block survives GC), or off (disabled). Per-job overridable via the <prefix>_flap_guard meta key. Only applies to deployment-producing jobs.")
+	fs.BoolVar(&c.AllowRollback, "allow-rollback", envBoolOrDefault("ALLOW_ROLLBACK", false), "Enable active rollback: for managed deployment-producing jobs whose update stanza does not set auto_revert, revert to the last stable version when a deployment fails. Off by default. Per-job overridable via the <prefix>_rollback meta key. Where the job's update stanza sets auto_revert=true, Nomad's own rollback wins and nomad-botherer stands down.")
 	fs.StringVar(&c.JobSelectorGlob, "job-selector-glob", envOrDefault("JOB_SELECTOR_GLOB", ""), "Glob pattern selecting jobs by name (e.g. 'myprefix-*', '*' for all). Jobs matching either this or --managed-meta-prefix are watched. Empty means no glob selection.")
 	fs.StringVar(&c.ManagedMetaPrefix, "managed-meta-prefix", envOrDefault("MANAGED_META_PREFIX", "gitops"), "Prefix for job meta keys used by nomad-botherer (e.g. 'gitops' means 'gitops_managed = true' in a job's HCL opts it in). Git is always the source of truth for these keys: when a job has an HCL file, the live job's keys are ignored for selection. Empty disables meta-based selection.")
 	fs.DurationVar(&c.MaxGitStaleness, "max-git-staleness", envDurationOrDefault("MAX_GIT_STALENESS", 0), "Maximum time since last successful git fetch before forcing a refresh (0 disables)")
@@ -139,6 +159,20 @@ func LoadFromArgs(fs *flag.FlagSet, args []string) (*Config, error) {
 	case "none", "image-only", "full":
 	default:
 		return nil, fmt.Errorf("--default-update-policy / DEFAULT_UPDATE_POLICY must be one of none, image-only, full; got %q", c.DefaultUpdatePolicy)
+	}
+
+	switch c.FlapGuard {
+	case "history", "tag", "off":
+	default:
+		return nil, fmt.Errorf("--flap-guard / FLAP_GUARD must be one of history, tag, off; got %q", c.FlapGuard)
+	}
+
+	// Tag mode builds failed-version tag names from the managed-meta prefix
+	// (<prefix>-failed-<fingerprint>) and recognises them by that prefix. With
+	// an empty prefix the tag name would start with "-failed-" and could never
+	// be recognised again, so durable blocking would silently not work.
+	if c.FlapGuard == "tag" && c.ManagedMetaPrefix == "" {
+		return nil, fmt.Errorf("--flap-guard=tag requires --managed-meta-prefix / MANAGED_META_PREFIX to be non-empty: failed-version tag names are derived from the prefix")
 	}
 
 	return c, nil

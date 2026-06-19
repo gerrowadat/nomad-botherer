@@ -37,7 +37,10 @@ type JobUpdateOperation string
 
 const (
 	JobUpdateOperationRegister   JobUpdateOperation = "REGISTER"
-	JobUpdateOperationDeregister JobUpdateOperation = "DEREGISTER" // not yet produced; reserved
+	JobUpdateOperationDeregister JobUpdateOperation = "DEREGISTER"
+	// JobUpdateOperationRevert rolls a job back to a prior stable version after
+	// a failed deployment (active rollback, for jobs without auto_revert).
+	JobUpdateOperationRevert JobUpdateOperation = "REVERT"
 )
 
 // JobUpdateStatus is the lifecycle state of a JobUpdate.
@@ -96,6 +99,12 @@ type JobUpdate struct {
 	AppliedAt  string `json:"applied_at,omitempty"` // RFC3339; empty until applied
 	Error      string `json:"error,omitempty"`
 
+	// Revert-only. RevertToVersion is the stable job version to roll back to.
+	// RevertFromVersion is the failed version the job must still be at for the
+	// revert to land (the enforcePriorVersion CAS guard).
+	RevertToVersion   uint64 `json:"revert_to_version,omitempty"`
+	RevertFromVersion uint64 `json:"revert_from_version,omitempty"`
+
 	// job is the parsed HCL job to register. In-memory only; the queue is
 	// rebuilt from a diff cycle after restart so this never needs to be
 	// serialised.
@@ -112,6 +121,18 @@ func updateID(jobID, commit string) string {
 		short = short[:7]
 	}
 	return fmt.Sprintf("%s/%s", jobID, short)
+}
+
+// nowRFC3339 is the timestamp format used on JobUpdate records.
+func nowRFC3339() string {
+	return time.Now().UTC().Format(time.RFC3339)
+}
+
+// revertUpdateID builds a stable identifier for a revert. It is keyed on the
+// failed version (not a git commit) so the same recovery re-detected each cycle
+// is recognisably the same update and dedups in the queue.
+func revertUpdateID(jobID string, failedVersion uint64) string {
+	return fmt.Sprintf("%s/revert-%d", jobID, failedVersion)
 }
 
 // maxTerminalUpdates caps how many terminal (SUCCEEDED/FAILED/SUPERSEDED)

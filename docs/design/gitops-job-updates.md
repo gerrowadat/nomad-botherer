@@ -434,7 +434,7 @@ without requiring log scraping.
   ever built, it is the strongest argument for the dispatched-executor model
   in "Where the apply runs", since the watch outlives any single
   nomad-botherer process. Researched in detail in
-  [automatic-rollback.md](../proposals/automatic-rollback.md), which recommends leaning on
+  [automatic-rollback.md](automatic-rollback.md), which recommends leaning on
   Nomad's native `auto_revert` plus a state-free "flap-loop guard" (don't
   re-apply a spec a recent failed job version already represents) rather than
   reimplementing health-watching rollback.

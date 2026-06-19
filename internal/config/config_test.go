@@ -639,6 +639,86 @@ func TestLoadFromArgs_InvalidUpdatePolicyRejected(t *testing.T) {
 	}
 }
 
+func TestLoadFromArgs_RollbackFlagDefaults(t *testing.T) {
+	for _, k := range []string{"FLAP_GUARD", "ALLOW_ROLLBACK"} {
+		os.Unsetenv(k)
+	}
+	cfg, err := LoadFromArgs(newFS(), []string{"--repo-url", "https://example.com/r.git"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.FlapGuard != "history" {
+		t.Errorf("FlapGuard default: want history, got %q", cfg.FlapGuard)
+	}
+	if cfg.AllowRollback {
+		t.Error("AllowRollback should default to false")
+	}
+}
+
+func TestLoadFromArgs_RollbackFlagsSet(t *testing.T) {
+	for _, k := range []string{"FLAP_GUARD", "ALLOW_ROLLBACK"} {
+		os.Unsetenv(k)
+	}
+	cfg, err := LoadFromArgs(newFS(), []string{
+		"--repo-url", "https://example.com/r.git",
+		"--flap-guard", "tag",
+		"--allow-rollback",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.FlapGuard != "tag" {
+		t.Errorf("FlapGuard: want tag, got %q", cfg.FlapGuard)
+	}
+	if !cfg.AllowRollback {
+		t.Error("AllowRollback: want true")
+	}
+}
+
+func TestLoadFromArgs_RollbackFlagEnvVars(t *testing.T) {
+	os.Setenv("FLAP_GUARD", "off")
+	os.Setenv("ALLOW_ROLLBACK", "true")
+	t.Cleanup(func() {
+		for _, k := range []string{"FLAP_GUARD", "ALLOW_ROLLBACK"} {
+			os.Unsetenv(k)
+		}
+	})
+	cfg, err := LoadFromArgs(newFS(), []string{"--repo-url", "https://example.com/r.git"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.FlapGuard != "off" || !cfg.AllowRollback {
+		t.Errorf("rollback env vars not honoured: %+v", cfg)
+	}
+}
+
+func TestLoadFromArgs_InvalidFlapGuardRejected(t *testing.T) {
+	os.Unsetenv("FLAP_GUARD")
+	_, err := LoadFromArgs(newFS(), []string{"--repo-url", "https://example.com/r.git", "--flap-guard", "sometimes"})
+	if err == nil {
+		t.Error("invalid flap-guard value should be rejected at config load")
+	}
+}
+
+func TestLoadFromArgs_TagModeRequiresMetaPrefix(t *testing.T) {
+	for _, k := range []string{"FLAP_GUARD", "MANAGED_META_PREFIX"} {
+		os.Unsetenv(k)
+	}
+	_, err := LoadFromArgs(newFS(), []string{
+		"--repo-url", "https://example.com/r.git",
+		"--flap-guard", "tag",
+		"--managed-meta-prefix", "",
+	})
+	if err == nil {
+		t.Error("--flap-guard=tag with an empty managed-meta-prefix should be rejected at config load")
+	}
+
+	// tag mode with the default (non-empty) prefix is fine.
+	if _, err := LoadFromArgs(newFS(), []string{"--repo-url", "https://example.com/r.git", "--flap-guard", "tag"}); err != nil {
+		t.Errorf("tag mode with the default prefix should be accepted, got %v", err)
+	}
+}
+
 func TestLoadFromArgs_MetaOnlyFlagDefaults(t *testing.T) {
 	for _, k := range []string{"APPLY_META_ONLY_CHANGES", "COUNT_META_ONLY_CHANGES"} {
 		os.Unsetenv(k)

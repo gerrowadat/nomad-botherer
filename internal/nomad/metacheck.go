@@ -27,6 +27,12 @@ func validManagedValue(v string) bool {
 	return v == "true" || v == "false"
 }
 
+// validFlapGuardValue accepts the per-job <prefix>_flap_guard override values,
+// the same set as the --flap-guard flag.
+func validFlapGuardValue(v string) bool {
+	return v == "history" || v == "tag" || v == "off"
+}
+
 // validateManagedMeta scans meta for keys addressed to nomad-botherer and
 // records an issue for any it cannot act on. source says where the meta was
 // seen ("hcl:<file>" or "nomad") for the log line.
@@ -50,6 +56,16 @@ func (d *Differ) validateManagedMeta(jobID, source string, meta map[string]strin
 			if !ValidUpdatePolicy(v) {
 				d.recordMetaIssue(jobID, source, k, v, metaIssueInvalidValue,
 					`accepted values are "full", "image-only" and "none"; treated as "none"`)
+			}
+		case d.managedMetaPrefix + "_flap_guard":
+			if !validFlapGuardValue(v) {
+				d.recordMetaIssue(jobID, source, k, v, metaIssueInvalidValue,
+					`accepted values are "history", "tag" and "off"; falling back to the --flap-guard default`)
+			}
+		case d.managedMetaPrefix + "_rollback":
+			if !validManagedValue(v) {
+				d.recordMetaIssue(jobID, source, k, v, metaIssueInvalidValue,
+					`accepted values are "true" and "false"; falling back to the --allow-rollback default`)
 			}
 		default:
 			d.recordMetaIssue(jobID, source, k, v, metaIssueUnknownKey,

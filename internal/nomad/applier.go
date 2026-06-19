@@ -77,6 +77,10 @@ func (d *Differ) applyUpdate(u *JobUpdate) {
 		d.applyDeregister(u)
 		return
 	}
+	if u.Operation == JobUpdateOperationRevert {
+		d.applyRevert(u)
+		return
+	}
 	if u.Operation != JobUpdateOperationRegister {
 		d.completeUpdate(u, JobUpdateStatusFailed, 0, fmt.Sprintf("unsupported operation %q", u.Operation))
 		return
@@ -176,4 +180,33 @@ func (d *Differ) applyDeregister(u *JobUpdate) {
 	}
 	slog.Info("Deregister: job deregistered", "job", u.JobID, "update_id", u.UpdateID, "eval_id", evalID, "purge", d.deregisterPurge)
 	d.completeUpdate(u, JobUpdateStatusSucceeded, 0, "")
+}
+
+// applyRevert rolls a job back to its last stable version after a failed
+// deployment. The revert is CAS-guarded by enforcePriorVersion (the failed
+// version): if the job has moved on since detection — a human change, or
+// Nomad's own auto_revert beating us to it — Nomad rejects the revert and the
+// update fails, leaving the next cycle to recompute against current state. This
+// is why a double-revert with auto_revert cannot happen: even if the
+// stand-down check were bypassed, the CAS guard would reject the redundant
+// write.
+func (d *Differ) applyRevert(u *JobUpdate) {
+	wq := &nomadapi.WriteOptions{Namespace: d.namespace}
+	enforce := u.RevertFromVersion
+
+	slog.Info("Revert: rolling failed deployment back to last stable version",
+		"job", u.JobID, "update_id", u.UpdateID,
+		"from_version", u.RevertFromVersion, "to_version", u.RevertToVersion)
+	resp, _, err := d.jobs.Revert(u.JobID, u.RevertToVersion, &enforce, wq, "", "")
+	if err != nil {
+		d.nomadAPIErrors.WithLabelValues("revert").Inc()
+		slog.Warn("Revert failed", "job", u.JobID, "update_id", u.UpdateID,
+			"from_version", u.RevertFromVersion, "to_version", u.RevertToVersion, "err", err)
+		d.completeUpdate(u, JobUpdateStatusFailed, 0, fmt.Sprintf("revert: %v", err))
+		d.invalidateSkip()
+		return
+	}
+	slog.Info("Revert: job reverted", "job", u.JobID, "update_id", u.UpdateID,
+		"eval_id", resp.EvalID, "new_modify_index", resp.JobModifyIndex)
+	d.completeUpdate(u, JobUpdateStatusSucceeded, resp.JobModifyIndex, "")
 }

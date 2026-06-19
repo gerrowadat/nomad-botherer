@@ -60,3 +60,33 @@ func MetaKeyIssues(d *Differ) *prometheus.CounterVec {
 func MetaKeyChanges(d *Differ) *prometheus.CounterVec {
 	return d.metaKeyChanges
 }
+
+// UpdatesBlockedKnownFailed exposes the flap-guard block counter.
+func UpdatesBlockedKnownFailed(d *Differ) *prometheus.CounterVec {
+	return d.updatesBlockedKnownFailed
+}
+
+// Rollbacks exposes the active-rollback outcome counter.
+func Rollbacks(d *Differ) *prometheus.CounterVec {
+	return d.rollbacks
+}
+
+// FailedVersionsTagged exposes the flap-guard tag counter.
+func FailedVersionsTagged(d *Differ) *prometheus.CounterVec {
+	return d.failedVersionsTagged
+}
+
+// SpecFingerprint exposes the spec fingerprint helper for unit tests.
+func SpecFingerprint(job *nomadapi.Job, metaPrefix string) (string, error) {
+	return specFingerprint(job, metaPrefix)
+}
+
+// LastStableVersion exposes the stable-version selection helper.
+func LastStableVersion(versions []*nomadapi.Job, failed uint64) (uint64, bool) {
+	return lastStableVersion(versions, failed)
+}
+
+// JobHasAutoRevert exposes the auto_revert detection helper.
+func JobHasAutoRevert(job *nomadapi.Job) bool {
+	return jobHasAutoRevert(job)
+}

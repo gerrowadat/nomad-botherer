@@ -1,5 +1,36 @@
 # Changelog
 
+## Unreleased
+
+### New features
+
+- **Rollback handling: a flap-loop guard and optional active rollback.** Both
+  apply only to deployment-producing jobs (service jobs with an `update` stanza
+  and health checks); other job kinds are unaffected.
+  - **Flap-loop guard** (`--flap-guard` / `FLAP_GUARD`, default `history`).
+    Prevents the apply→fail→revert→re-apply loop by asking Nomad's own version
+    history whether a recent deployment of the exact HCL spec already failed; if
+    so, the re-apply is withheld and surfaced as the new `apply_action`
+    `blocked_known_failed`. The guard keys on the spec, not the commit, so it
+    releases automatically when Git moves to a spec that has not failed. Modes:
+    `history` (read-only, bounded by Nomad's version GC), `tag` (also tags the
+    failed version so the block survives GC), `off`. Per-job override via the
+    `<prefix>_flap_guard` meta key. New counters
+    `nomad_botherer_updates_blocked_known_failed_total{job}` and
+    `nomad_botherer_failed_versions_tagged_total{job}`.
+  - **Active rollback** (`--allow-rollback` / `ALLOW_ROLLBACK`, default off).
+    For managed jobs whose `update` stanza does not set `auto_revert`, reverts a
+    failed deployment to the last stable version via a CAS-guarded
+    `Jobs.Revert`. Where a job sets `auto_revert`, Nomad's own rollback always
+    wins and nomad-botherer stands down (logged once). Per-job override via the
+    `<prefix>_rollback` meta key. New `REVERT` operation in
+    `nomad_botherer_job_updates_total`; new counter
+    `nomad_botherer_rollbacks_total{job,result}`.
+  - Recommended practice is documented in the new README "Rollback" section:
+    prefer `auto_revert` in the job HCL; let nomad-botherer's job be to not
+    fight the revert. No persistent state is introduced — all signals come from
+    Nomad's version history and deployment outcomes.
+
 ## v0.7.0 — 2026-06-14
 
 ### New features
