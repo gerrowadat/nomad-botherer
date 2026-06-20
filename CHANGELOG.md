@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## v0.8.0 — 2026-06-20
+
+Verified against Nomad 1.9.6, 1.10.5, 1.11.3, and 2.0.2 (full regression
+suite). See [docs/nomad-versions.md](docs/nomad-versions.md).
 
 ### New features
 
