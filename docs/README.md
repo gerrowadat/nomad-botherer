@@ -43,3 +43,8 @@ your deployment.
   release process.
 - [Nomad version compatibility](nomad-versions.md) — which Nomad versions each
   release is verified against.
+
+## License
+
+nomad-botherer is licensed under the Apache License, Version 2.0. See
+[`LICENSE`](../LICENSE).

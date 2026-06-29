@@ -93,3 +93,7 @@ The full docs live in [`docs/`](docs/README.md):
   [design philosophy](docs/philosophy.md), [prior art](docs/prior-art.md),
   [design records](docs/design/).
 - **Contributing** — [development & testing](docs/development.md).
+
+## License
+
+Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE).
