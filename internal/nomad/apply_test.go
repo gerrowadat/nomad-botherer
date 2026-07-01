@@ -8,8 +8,8 @@ import (
 	nomadapi "github.com/hashicorp/nomad/api"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	"github.com/gerrowadat/nomad-botherer/internal/config"
-	"github.com/gerrowadat/nomad-botherer/internal/nomad"
+	"github.com/gerrowadat/nomad-gitops/internal/config"
+	"github.com/gerrowadat/nomad-gitops/internal/nomad"
 )
 
 // metaOnlyManagedDiff is a plan diff whose only change is one of our own

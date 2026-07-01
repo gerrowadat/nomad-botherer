@@ -1,12 +1,12 @@
 # Installation
 
-Get a nomad-botherer binary or container image. To then run it, see
-[Running nomad-botherer](running.md).
+Get a nomad-gitops binary or container image. To then run it, see
+[Running nomad-gitops](running.md).
 
 ## From a Docker image (recommended)
 
 ```bash
-docker pull ghcr.io/gerrowadat/nomad-botherer:latest
+docker pull ghcr.io/gerrowadat/nomad-gitops:latest
 ```
 
 Pre-built images are published to GitHub Container Registry for `linux/amd64`
@@ -22,10 +22,10 @@ and `linux/arm64` (Raspberry Pi 4+).
 Requires Go 1.25+.
 
 ```bash
-git clone https://github.com/gerrowadat/nomad-botherer.git
-cd nomad-botherer
+git clone https://github.com/gerrowadat/nomad-gitops.git
+cd nomad-gitops
 make build
-./nomad-botherer --help
+./nomad-gitops --help
 ```
 
 `make install` installs the binary to `$GOPATH/bin`. See

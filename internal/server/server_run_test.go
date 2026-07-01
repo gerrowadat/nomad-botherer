@@ -10,8 +10,8 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/gerrowadat/nomad-botherer/internal/config"
-	"github.com/gerrowadat/nomad-botherer/internal/server"
+	"github.com/gerrowadat/nomad-gitops/internal/config"
+	"github.com/gerrowadat/nomad-gitops/internal/server"
 )
 
 // TestServer_Run_ShutsDownOnContextCancel starts the real HTTP server on an

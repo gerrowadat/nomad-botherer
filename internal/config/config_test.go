@@ -14,7 +14,7 @@ func newFS() *flag.FlagSet {
 // ── envOrDefault / envDurationOrDefault ──────────────────────────────────────
 
 func TestEnvOrDefault_Missing(t *testing.T) {
-	const key = "TEST_NOMAD_BOTHERER_FOO"
+	const key = "TEST_NOMAD_GITOPS_FOO"
 	os.Unsetenv(key)
 	if got := envOrDefault(key, "default"); got != "default" {
 		t.Errorf("want default, got %q", got)
@@ -22,7 +22,7 @@ func TestEnvOrDefault_Missing(t *testing.T) {
 }
 
 func TestEnvOrDefault_Set(t *testing.T) {
-	const key = "TEST_NOMAD_BOTHERER_FOO"
+	const key = "TEST_NOMAD_GITOPS_FOO"
 	os.Setenv(key, "fromenv")
 	t.Cleanup(func() { os.Unsetenv(key) })
 	if got := envOrDefault(key, "default"); got != "fromenv" {
@@ -31,7 +31,7 @@ func TestEnvOrDefault_Set(t *testing.T) {
 }
 
 func TestEnvDurationOrDefault_Missing(t *testing.T) {
-	const key = "TEST_NOMAD_BOTHERER_DUR"
+	const key = "TEST_NOMAD_GITOPS_DUR"
 	os.Unsetenv(key)
 	if got := envDurationOrDefault(key, time.Minute); got != time.Minute {
 		t.Errorf("want 1m, got %v", got)
@@ -39,7 +39,7 @@ func TestEnvDurationOrDefault_Missing(t *testing.T) {
 }
 
 func TestEnvDurationOrDefault_Valid(t *testing.T) {
-	const key = "TEST_NOMAD_BOTHERER_DUR"
+	const key = "TEST_NOMAD_GITOPS_DUR"
 	os.Setenv(key, "30s")
 	t.Cleanup(func() { os.Unsetenv(key) })
 	if got := envDurationOrDefault(key, time.Minute); got != 30*time.Second {
@@ -48,7 +48,7 @@ func TestEnvDurationOrDefault_Valid(t *testing.T) {
 }
 
 func TestEnvDurationOrDefault_Invalid(t *testing.T) {
-	const key = "TEST_NOMAD_BOTHERER_DUR"
+	const key = "TEST_NOMAD_GITOPS_DUR"
 	os.Setenv(key, "not-a-duration")
 	t.Cleanup(func() { os.Unsetenv(key) })
 	if got := envDurationOrDefault(key, time.Minute); got != time.Minute {
@@ -265,7 +265,7 @@ func TestLoadFromArgs_BranchFlag(t *testing.T) {
 }
 
 func TestEnvBoolOrDefault_Missing(t *testing.T) {
-	const key = "TEST_NOMAD_BOTHERER_BOOL"
+	const key = "TEST_NOMAD_GITOPS_BOOL"
 	os.Unsetenv(key)
 	if got := envBoolOrDefault(key, true); got != true {
 		t.Error("missing env should return default")
@@ -273,7 +273,7 @@ func TestEnvBoolOrDefault_Missing(t *testing.T) {
 }
 
 func TestEnvBoolOrDefault_True(t *testing.T) {
-	const key = "TEST_NOMAD_BOTHERER_BOOL"
+	const key = "TEST_NOMAD_GITOPS_BOOL"
 	for _, v := range []string{"true", "1", "yes", "TRUE", "YES"} {
 		os.Setenv(key, v)
 		t.Cleanup(func() { os.Unsetenv(key) })
@@ -284,7 +284,7 @@ func TestEnvBoolOrDefault_True(t *testing.T) {
 }
 
 func TestEnvBoolOrDefault_False(t *testing.T) {
-	const key = "TEST_NOMAD_BOTHERER_BOOL"
+	const key = "TEST_NOMAD_GITOPS_BOOL"
 	for _, v := range []string{"false", "0", "no", "FALSE"} {
 		os.Setenv(key, v)
 		t.Cleanup(func() { os.Unsetenv(key) })
@@ -563,7 +563,7 @@ func TestLoadFromArgs_JobSelectorGlobEnv(t *testing.T) {
 
 // TestLoadFromArgs_HCLCanonicalFlagRemoved pins the deliberate removal of
 // --managed-meta-hcl-canonical: Git is always the source of truth for
-// nomad-botherer's own meta keys, and there is no flag to invert that.
+// nomad-gitops's own meta keys, and there is no flag to invert that.
 func TestLoadFromArgs_HCLCanonicalFlagRemoved(t *testing.T) {
 	_, err := LoadFromArgs(newFS(), []string{
 		"--repo-url", "https://example.com/r.git",
@@ -651,8 +651,8 @@ func TestLoad_UsesCommandLineAndArgs(t *testing.T) {
 		os.Args = oldArgs
 		flag.CommandLine = oldCommandLine
 	})
-	flag.CommandLine = flag.NewFlagSet("nomad-botherer", flag.ContinueOnError)
-	os.Args = []string{"nomad-botherer", "--repo-url", "https://example.com/load.git"}
+	flag.CommandLine = flag.NewFlagSet("nomad-gitops", flag.ContinueOnError)
+	os.Args = []string{"nomad-gitops", "--repo-url", "https://example.com/load.git"}
 
 	cfg, err := Load()
 	if err != nil {

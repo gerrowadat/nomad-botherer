@@ -1,6 +1,6 @@
 # Design philosophy
 
-Why nomad-botherer behaves the way it does. These principles explain most of the
+Why nomad-gitops behaves the way it does. These principles explain most of the
 non-obvious behaviour in the [FAQ](faq.md), and they are load-bearing — they are
 the reasons the apply side is safe to turn on. The retrospective design records
 for individual features live in [`design/`](design/); the survey of other tools
@@ -8,7 +8,7 @@ and the mistakes deliberately avoided is in [`prior-art.md`](prior-art.md).
 
 ## A drift detector first, a GitOps operator second
 
-nomad-botherer always observes and reports the difference between Git and a live
+nomad-gitops always observes and reports the difference between Git and a live
 Nomad cluster. Applying that difference — re-registering jobs from their HCL — is
 a *second*, optional mode that is off by default. Detection is the product;
 reconciliation is a feature you opt into. This ordering is why running the tool
@@ -16,7 +16,7 @@ is safe with zero configuration beyond pointing it at a repo and a cluster.
 
 ## Conservative by default — opt-in, twice over
 
-Out of the box nomad-botherer never writes. Turning on reconciliation is
+Out of the box nomad-gitops never writes. Turning on reconciliation is
 deliberately layered:
 
 - `--default-update-policy` defaults to `none`, so a fresh deployment never
@@ -36,7 +36,7 @@ When a job has an HCL file in the watched repo, that file alone decides whether
 the job is managed and under which policy. A stale `gitops_*` key on the live job
 never overrides Git; it is just drift that converges. There is deliberately no
 flag to invert this. This makes the system predictable: to change what
-nomad-botherer does to a job, you change the job's HCL and commit it —
+nomad-gitops does to a job, you change the job's HCL and commit it —
 reviewable, version-controlled, and the same whether the tool was running at the
 time or not.
 
@@ -48,7 +48,7 @@ identically across restarts.
 ## No persistent state we are responsible for
 
 All durable truth lives in Git (desired state) and Nomad (actual state, version
-history, deployment outcomes). nomad-botherer holds its working state — the diff
+history, deployment outcomes). nomad-gitops holds its working state — the diff
 results and the update queue — in memory only, and rebuilds it from a single diff
 cycle after a restart. Consequences:
 
@@ -78,7 +78,7 @@ applies, the older one is superseded — the most recent intended state wins.
 
 ## Never write to Git
 
-nomad-botherer reads Git and reads/writes Nomad — nothing else. No commits, no
+nomad-gitops reads Git and reads/writes Nomad — nothing else. No commits, no
 pushes, no GitHub API writes, no state branch; it holds no Git write credentials.
 Repo changes (including image-tag bumps surfaced by external tooling) always
 arrive by PR from humans or from automation that is *not* this tool. The most it
@@ -95,14 +95,14 @@ immediate re-check before the call. Purge is never the default.
 
 ## Don't fight the platform
 
-Where Nomad already does a job well, nomad-botherer stays out of the way rather
+Where Nomad already does a job well, nomad-gitops stays out of the way rather
 than reimplementing it:
 
 - **The autoscaler owns `Count`.** For groups with a scaling policy, Count/Scaling
   changes are excluded from drift consideration, so the tool never overwrites
   autoscaler-managed counts every cycle.
 - **Nomad's `auto_revert` owns rollback.** The recommended way to recover from a
-  bad deploy is Nomad's native health-checked rollback; nomad-botherer's job is to
+  bad deploy is Nomad's native health-checked rollback; nomad-gitops's job is to
   *not fight the revert* (the flap-loop guard) rather than to duplicate it. Active
   rollback exists for jobs that opt out of `auto_revert`, but it always stands
   down when Nomad would act.

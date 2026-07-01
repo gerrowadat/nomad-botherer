@@ -16,9 +16,9 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	"github.com/gerrowadat/nomad-botherer/internal/config"
-	"github.com/gerrowadat/nomad-botherer/internal/nomad"
-	"github.com/gerrowadat/nomad-botherer/internal/server"
+	"github.com/gerrowadat/nomad-gitops/internal/config"
+	"github.com/gerrowadat/nomad-gitops/internal/nomad"
+	"github.com/gerrowadat/nomad-gitops/internal/server"
 )
 
 // mockDiffSource implements server.DiffSource.
@@ -424,7 +424,7 @@ func TestWebhook_WithSecret_ValidSignature_Triggers(t *testing.T) {
 func TestWebhook_PushCounter(t *testing.T) {
 	srv, _, reg := newTestServerWithRegistry(t, nil, "", "main")
 	srv.Handler().ServeHTTP(httptest.NewRecorder(), githubPushRequest(t, "", "main", "abc"))
-	if count := testutil.CollectAndCount(reg, "nomad_botherer_webhook_events_total"); count == 0 {
+	if count := testutil.CollectAndCount(reg, "nomad_gitops_webhook_events_total"); count == 0 {
 		t.Error("expected webhook_events_total to be registered")
 	}
 }
@@ -449,7 +449,7 @@ func TestWebhook_CounterByEvent(t *testing.T) {
 	}
 	counts := map[string]float64{}
 	for _, mf := range families {
-		if mf.GetName() != "nomad_botherer_webhook_events_total" {
+		if mf.GetName() != "nomad_gitops_webhook_events_total" {
 			continue
 		}
 		for _, m := range mf.GetMetric() {
@@ -531,14 +531,14 @@ func TestWebhook_SuccessGauge(t *testing.T) {
 		t.Fatalf("gather: %v", err)
 	}
 	for _, mf := range families {
-		if mf.GetName() == "nomad_botherer_last_webhook_success_timestamp_seconds" {
+		if mf.GetName() == "nomad_gitops_last_webhook_success_timestamp_seconds" {
 			if v := mf.GetMetric()[0].GetGauge().GetValue(); v == 0 {
 				t.Error("last_webhook_success gauge should be non-zero after a successful webhook")
 			}
 			return
 		}
 	}
-	t.Error("nomad_botherer_last_webhook_success_timestamp_seconds not found in registry")
+	t.Error("nomad_gitops_last_webhook_success_timestamp_seconds not found in registry")
 }
 
 func TestWebhook_FailureGauge(t *testing.T) {
@@ -558,14 +558,14 @@ func TestWebhook_FailureGauge(t *testing.T) {
 		t.Fatalf("gather: %v", err)
 	}
 	for _, mf := range families {
-		if mf.GetName() == "nomad_botherer_last_webhook_failure_timestamp_seconds" {
+		if mf.GetName() == "nomad_gitops_last_webhook_failure_timestamp_seconds" {
 			if v := mf.GetMetric()[0].GetGauge().GetValue(); v == 0 {
 				t.Error("last_webhook_failure gauge should be non-zero after a failed webhook")
 			}
 			return
 		}
 	}
-	t.Error("nomad_botherer_last_webhook_failure_timestamp_seconds not found in registry")
+	t.Error("nomad_gitops_last_webhook_failure_timestamp_seconds not found in registry")
 }
 
 func TestWebhook_WithSecret_InvalidSignature_Rejected(t *testing.T) {
@@ -697,8 +697,8 @@ func TestMetrics_Endpoint_ContainsBuildInfo(t *testing.T) {
 	srv.Handler().ServeHTTP(rec, req)
 
 	body := rec.Body.String()
-	if !strings.Contains(body, "nomad_botherer_info") {
-		t.Error("expected nomad_botherer_info metric in /metrics output")
+	if !strings.Contains(body, "nomad_gitops_info") {
+		t.Error("expected nomad_gitops_info metric in /metrics output")
 	}
 }
 

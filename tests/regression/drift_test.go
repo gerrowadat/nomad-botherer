@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gerrowadat/nomad-botherer/internal/nomad"
+	"github.com/gerrowadat/nomad-gitops/internal/nomad"
 )
 
 // TestDrift_MissingFromNomad verifies that a job defined in HCL but absent
@@ -223,13 +223,13 @@ func TestDrift_RaftIndexSkip(t *testing.T) {
 		if err := d.Check(hclFiles, commit); err != nil {
 			t.Fatalf("second Check: %v", err)
 		}
-		if gatherCounter(t, reg, "nomad_botherer_diff_checks_skipped_total") >= 1 {
+		if gatherCounter(t, reg, "nomad_gitops_diff_checks_skipped_total") >= 1 {
 			return
 		}
 		time.Sleep(time.Second)
 	}
 	t.Errorf("no skipped check observed after identical commit+index within 30s; got %v",
-		gatherCounter(t, reg, "nomad_botherer_diff_checks_skipped_total"))
+		gatherCounter(t, reg, "nomad_gitops_diff_checks_skipped_total"))
 }
 
 // TestDrift_CommitChange verifies that changing the commit hash (with the same
@@ -252,11 +252,11 @@ func TestDrift_CommitChange(t *testing.T) {
 		t.Fatalf("second Check: %v", err)
 	}
 
-	skipped := gatherCounter(t, reg, "nomad_botherer_diff_checks_skipped_total")
+	skipped := gatherCounter(t, reg, "nomad_gitops_diff_checks_skipped_total")
 	if skipped > 0 {
 		t.Errorf("commit change must not be skipped; skipped=%v", skipped)
 	}
-	checks := gatherCounter(t, reg, "nomad_botherer_diff_checks_total")
+	checks := gatherCounter(t, reg, "nomad_gitops_diff_checks_total")
 	if checks < 2 {
 		t.Errorf("want ≥2 checks (one per distinct commit), got %v", checks)
 	}
@@ -328,13 +328,13 @@ func TestDrift_ForceCheck(t *testing.T) {
 	}
 
 	// The staleness counter must always be incremented by ForceCheck.
-	stale := gatherCounter(t, reg, "nomad_botherer_nomad_staleness_checks_total")
+	stale := gatherCounter(t, reg, "nomad_gitops_staleness_checks_total")
 	if stale < 1 {
 		t.Errorf("want ≥1 staleness check counted, got %v", stale)
 	}
 
 	// Total checks must be ≥1 (the initial Check call).
-	checks := gatherCounter(t, reg, "nomad_botherer_diff_checks_total")
+	checks := gatherCounter(t, reg, "nomad_gitops_diff_checks_total")
 	if checks < 1 {
 		t.Errorf("want ≥1 diff check total, got %v", checks)
 	}

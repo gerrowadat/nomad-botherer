@@ -5,8 +5,8 @@ import (
 
 	nomadapi "github.com/hashicorp/nomad/api"
 
-	"github.com/gerrowadat/nomad-botherer/internal/config"
-	"github.com/gerrowadat/nomad-botherer/internal/nomad"
+	"github.com/gerrowadat/nomad-gitops/internal/config"
+	"github.com/gerrowadat/nomad-gitops/internal/nomad"
 )
 
 func boolPtr(b bool) *bool { return &b }

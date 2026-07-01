@@ -10,10 +10,10 @@ import (
 
 	"github.com/joho/godotenv"
 
-	"github.com/gerrowadat/nomad-botherer/internal/config"
-	"github.com/gerrowadat/nomad-botherer/internal/gitwatch"
-	"github.com/gerrowadat/nomad-botherer/internal/nomad"
-	"github.com/gerrowadat/nomad-botherer/internal/server"
+	"github.com/gerrowadat/nomad-gitops/internal/config"
+	"github.com/gerrowadat/nomad-gitops/internal/gitwatch"
+	"github.com/gerrowadat/nomad-gitops/internal/nomad"
+	"github.com/gerrowadat/nomad-gitops/internal/server"
 )
 
 // Injected at build time via -ldflags.
@@ -36,7 +36,7 @@ func main() {
 	}
 
 	setupLogging(cfg.LogLevel)
-	slog.Info("Starting nomad-botherer", "version", version, "commit", commit, "buildDate", buildDate)
+	slog.Info("Starting nomad-gitops", "version", version, "commit", commit, "buildDate", buildDate)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()

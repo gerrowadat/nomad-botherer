@@ -1,6 +1,6 @@
 # Rollback: recovering from a bad change
 
-When nomad-botherer applies drift it re-registers the job from HCL. If that
+When nomad-gitops applies drift it re-registers the job from HCL. If that
 change is bad — a new image crash-loops, a config error fails health checks —
 something has to stop the obvious failure mode: apply commit `C`, the deployment
 fails, the job is reverted to the prior version, the next diff cycle sees Git
@@ -33,11 +33,11 @@ job "api" {
 
 With `auto_revert = true` and real health checks, **Nomad** watches the rollout,
 fails the deployment if allocations do not become healthy, and reverts to the
-last stable version — in-cluster, surviving any nomad-botherer restart, using the
-same machinery `nomad job run` already relies on. nomad-botherer stays out of the
+last stable version — in-cluster, surviving any nomad-gitops restart, using the
+same machinery `nomad job run` already relies on. nomad-gitops stays out of the
 way. This is the gold standard; prefer it.
 
-nomad-botherer's job in this case is only to *not fight the revert* — that is the
+nomad-gitops's job in this case is only to *not fight the revert* — that is the
 flap-loop guard, on by default.
 
 ## The flap-loop guard (`--flap-guard`, default `history`)
@@ -57,7 +57,7 @@ non-stable version.
 | Mode | Behaviour | Trade-off |
 |---|---|---|
 | `history` (default) | Compares the HCL spec against Nomad's retained version history each cycle. | Read-only, no state written. Bounded by Nomad's version GC (`job_gc_threshold`): once the failed version is GC'd, the bad spec is retried **at most once more**, fails, and the guard re-engages. Degrades to "retry at most once per GC window", never a tight loop. |
-| `tag` | As `history`, but also tags the failed version (`<prefix>-failed-<fingerprint>`) so the block survives GC. | Durable across any time horizon and restarts. The cost: nomad-botherer writes version tags into Nomad (a Nomad-native write, not a job-meta write, so no meta-drift) and becomes responsible for that state. A version carries at most one tag, so an already-tagged version is left alone. Requires a non-empty `--managed-meta-prefix` (tag names derive from it); rejected at config load otherwise. |
+| `tag` | As `history`, but also tags the failed version (`<prefix>-failed-<fingerprint>`) so the block survives GC. | Durable across any time horizon and restarts. The cost: nomad-gitops writes version tags into Nomad (a Nomad-native write, not a job-meta write, so no meta-drift) and becomes responsible for that state. A version carries at most one tag, so an already-tagged version is left alone. Requires a non-empty `--managed-meta-prefix` (tag names derive from it); rejected at config load otherwise. |
 | `off` | The guard is disabled. | A known-bad spec can loop. Only sensible per-job, via the meta key, for a job where you accept the risk. |
 
 Per job, override with the `<prefix>_flap_guard` meta key (`history`, `tag`, or
@@ -71,7 +71,7 @@ safe — a *false block* of a good change would need a SHA-256 collision.
 ## Active rollback (`--allow-rollback`, default off)
 
 For jobs that did **not** set `auto_revert` — and for operators who want
-nomad-botherer to centralise the behaviour — active rollback makes nomad-botherer
+nomad-gitops to centralise the behaviour — active rollback makes nomad-gitops
 do the revert itself. Each diff cycle it checks the latest deployment of each
 rollback-enabled job; if it has **failed**, it reverts the job to its last stable
 version with `Jobs.Revert`, CAS-guarded on the failed version so a concurrent
@@ -81,7 +81,7 @@ This is off by default and is the heavier, riskier path: it duplicates machinery
 Nomad already has for the `auto_revert` case. Prefer `auto_revert`.
 
 - **`auto_revert` always wins.** If a rollback-enabled job's `update` stanza also
-  sets `auto_revert`, nomad-botherer stands down and lets Nomad revert, logging
+  sets `auto_revert`, nomad-gitops stands down and lets Nomad revert, logging
   the clash once. (Even if that check were bypassed, the CAS guard would reject
   the redundant revert.)
 - Enable per job with `<prefix>_rollback = "true"` (or disable a job while the

@@ -1,4 +1,4 @@
-module github.com/gerrowadat/nomad-botherer
+module github.com/gerrowadat/nomad-gitops
 
 go 1.25.11
 

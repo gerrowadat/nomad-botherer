@@ -21,7 +21,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 
-	"github.com/gerrowadat/nomad-botherer/internal/config"
+	"github.com/gerrowadat/nomad-gitops/internal/config"
 )
 
 // Watcher holds a live in-memory clone of a git repo and keeps it up to date.
@@ -56,19 +56,19 @@ func NewWithRegistry(cfg *config.Config, onChange func(commit string), reg prome
 		triggerCh: make(chan struct{}, 1),
 		onChange:  onChange,
 		gitFetches: f.NewCounter(prometheus.CounterOpts{
-			Name: "nomad_botherer_git_fetches_total",
+			Name: "nomad_gitops_git_fetches_total",
 			Help: "Total number of remote git fetch/clone attempts.",
 		}),
 		gitFetchErrors: f.NewCounter(prometheus.CounterOpts{
-			Name: "nomad_botherer_git_fetch_errors_total",
+			Name: "nomad_gitops_git_fetch_errors_total",
 			Help: "Total number of remote git fetch/clone failures.",
 		}),
 		gitLastUpdate: f.NewGauge(prometheus.GaugeOpts{
-			Name: "nomad_botherer_git_last_update_timestamp_seconds",
+			Name: "nomad_gitops_git_last_update_timestamp_seconds",
 			Help: "Unix timestamp of the most recent successful git fetch.",
 		}),
 		staleRefreshes: f.NewCounter(prometheus.CounterOpts{
-			Name: "nomad_botherer_git_staleness_refreshes_total",
+			Name: "nomad_gitops_git_staleness_refreshes_total",
 			Help: "Total number of git fetches triggered by the staleness check.",
 		}),
 	}

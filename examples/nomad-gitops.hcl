@@ -1,20 +1,20 @@
-# nomad-botherer — example Nomad job definition
+# nomad-gitops — example Nomad job definition
 #
-# Run nomad-botherer as a Nomad service job on the same cluster it watches.
+# Run nomad-gitops as a Nomad service job on the same cluster it watches.
 # This file is intended as a starting point: copy it into your job repo,
 # edit the env {} block for your environment, and submit with:
 #
-#   nomad job run nomad-botherer.hcl
+#   nomad job run nomad-gitops.hcl
 #
 # The only required setting is GIT_REPO_URL. Everything else has a sensible
 # default. Set API_KEY to enable the authenticated JSON API (/api/v1/).
 
-job "nomad-botherer" {
-  # Run in the same namespace as the jobs you want to watch. nomad-botherer
+job "nomad-gitops" {
+  # Run in the same namespace as the jobs you want to watch. nomad-gitops
   # does not need elevated privileges: read access (list-jobs, read-job) is
   # all that is required for detection; add submit-job for the apply side.
   #
-  # On an ACL-enabled cluster, use workload-identity LOGIN: nomad-botherer
+  # On an ACL-enabled cluster, use workload-identity LOGIN: nomad-gitops
   # exchanges the task's identity JWT for a real ACL token via /v1/acl/login and
   # refreshes it before it expires. (A raw WI JWT cannot be used directly — Nomad
   # rejects it on Job.Plan, which every drift check needs; see issue #74.)
@@ -24,12 +24,12 @@ job "nomad-botherer" {
   #      bound_audiences=["nomad.io"], max_token_ttl=30m).
   #   2. The named identity {} block on the task below (aud matches the method).
   #   3. A policy + binding rule mapping this job to it:
-  #        # nomad-botherer-policy.hcl
+  #        # nomad-gitops-policy.hcl
   #        namespace "default" { capabilities = ["list-jobs", "read-job", "submit-job"] }
-  #        nomad acl policy apply nomad-botherer nomad-botherer-policy.hcl
+  #        nomad acl policy apply nomad-gitops nomad-gitops-policy.hcl
   #        nomad acl binding-rule create -auth-method nomad-workloads \
-  #          -bind-type policy -bind-name nomad-botherer \
-  #          -selector 'value.nomad_job_id == "nomad-botherer"'
+  #          -bind-type policy -bind-name nomad-gitops \
+  #          -selector 'value.nomad_job_id == "nomad-gitops"'
   #   4. Set NOMAD_LOGIN_AUTH_METHOD / NOMAD_LOGIN_JWT_FILE in env {} below.
   #
   # submit-job is required for Job.Plan even in detection-only mode. Full setup:
@@ -38,15 +38,15 @@ job "nomad-botherer" {
   datacenters = ["dc1"]
   type        = "service"
 
-  # Opt this job in to its own monitoring so nomad-botherer watches itself
+  # Opt this job in to its own monitoring so nomad-gitops watches itself
   # for drift. The meta key name is controlled by MANAGED_META_PREFIX below;
   # with the default prefix of "gitops" the key is "gitops_managed".
   meta {
     gitops_managed = "true"
   }
 
-  group "botherer" {
-    # nomad-botherer stores all git state in memory and writes nothing to
+  group "main" {
+    # nomad-gitops stores all git state in memory and writes nothing to
     # disk. A single allocation is correct; running more than one produces
     # duplicate drift reports.
     count = 1
@@ -65,11 +65,11 @@ job "nomad-botherer" {
       port "http" { to = 8080 }
     }
 
-    task "nomad-botherer" {
+    task "nomad-gitops" {
       driver = "docker"
 
       config {
-        image = "ghcr.io/gerrowadat/nomad-botherer:latest"
+        image = "ghcr.io/gerrowadat/nomad-gitops:latest"
         ports = ["http"]
       }
 
@@ -77,7 +77,7 @@ job "nomad-botherer" {
       #
       # A NAMED identity whose audience matches the JWT auth method (step 1 in
       # the job comment above). Written to ${NOMAD_SECRETS_DIR}/nomad_nomad-api.jwt,
-      # which nomad-botherer exchanges for an ACL token via /v1/acl/login (login
+      # which nomad-gitops exchanges for an ACL token via /v1/acl/login (login
       # mode, enabled by NOMAD_LOGIN_AUTH_METHOD below) and refreshes before it
       # expires. Do NOT set `env = true`: an env token is captured once at task
       # start and never refreshed.
@@ -113,7 +113,7 @@ job "nomad-botherer" {
         # For HTTPS repos: a GitHub PAT, GitLab deploy token, or similar.
         # Pass via a Nomad Variable (recommended) rather than hardcoding here:
         #
-        #   nomad var put nomad/jobs/nomad-botherer GIT_TOKEN=ghp_...
+        #   nomad var put nomad/jobs/nomad-gitops GIT_TOKEN=ghp_...
         #
         # Then reference it in a template block (see the template section below
         # for an example of reading Nomad Variables into env vars).
@@ -141,7 +141,7 @@ job "nomad-botherer" {
         # SecretID (does not refresh; unsuitable for long-running use with
         # short-lived tokens):
         #   NOMAD_TOKEN = ""
-        # or point at a file containing a SecretID that nomad-botherer re-reads:
+        # or point at a file containing a SecretID that nomad-gitops re-reads:
         #   NOMAD_TOKEN_FILE = "/secrets/nomad_token"
 
         # Namespace to watch. Defaults to "default".
@@ -171,7 +171,7 @@ job "nomad-botherer" {
 
         # ── Job selection ───────────────────────────────────────────────────
         #
-        # nomad-botherer does not watch every job on the cluster by default.
+        # nomad-gitops does not watch every job on the cluster by default.
         # A job must match at least one of the two criteria below.
         #
         # Meta key (on by default): any job with
@@ -179,7 +179,7 @@ job "nomad-botherer" {
         # in its HCL definition is automatically watched. The prefix before
         # "_managed" is controlled by MANAGED_META_PREFIX. If you need to
         # change it, keep "gitops" as a root (e.g. "gitops_myteam") so all
-        # nomad-botherer keys remain visually grouped on a shared cluster.
+        # nomad-gitops keys remain visually grouped on a shared cluster.
         MANAGED_META_PREFIX = "gitops"
 
         # Glob: watch all jobs whose name matches a shell glob pattern.
@@ -225,13 +225,13 @@ job "nomad-botherer" {
       # a Nomad Variable rather than hardcoding them in env {}.
       #
       # First, create the variable:
-      #   nomad var put nomad/jobs/nomad-botherer \
+      #   nomad var put nomad/jobs/nomad-gitops \
       #     GIT_TOKEN=ghp_... \
       #     API_KEY=your-long-random-key
       #
       # template {
       #   data        = <<-EOT
-      #     {{ with nomadVar "nomad/jobs/nomad-botherer" }}
+      #     {{ with nomadVar "nomad/jobs/nomad-gitops" }}
       #     GIT_TOKEN={{ .GIT_TOKEN }}
       #     API_KEY={{ .API_KEY }}
       #     {{ end }}
@@ -241,7 +241,7 @@ job "nomad-botherer" {
       # }
 
       resources {
-        # nomad-botherer is lightweight: it holds a single in-memory git clone
+        # nomad-gitops is lightweight: it holds a single in-memory git clone
         # and makes periodic API calls. 128 MiB is ample for most repos; raise
         # it if your repo is very large or contains many large binary files.
         cpu    = 100
@@ -249,7 +249,7 @@ job "nomad-botherer" {
       }
 
       service {
-        name     = "nomad-botherer"
+        name     = "nomad-gitops"
         port     = "http"
 
         # Change to "consul" if you are using Consul service discovery.

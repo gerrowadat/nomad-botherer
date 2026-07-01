@@ -20,7 +20,7 @@ image updates — proposed).
 
 ## Background
 
-nomad-botherer currently detects drift between a Git repository and a live Nomad
+nomad-gitops currently detects drift between a Git repository and a live Nomad
 cluster, but takes no action on it. This proposal describes how to extend it to
 *apply* changes — turning it from a drift detector into a GitOps operator that
 reconciles Nomad job state toward what is declared in Git.
@@ -70,7 +70,7 @@ observation side. A new `JobUpdate` struct captures the action side:
 // JobUpdate represents a single intended change to a Nomad job, derived from
 // a detected diff between Git and the cluster. One diff produces one update.
 type JobUpdate struct {
-    // Unique identifier for this update, assigned by nomad-botherer.
+    // Unique identifier for this update, assigned by nomad-gitops.
     // Format: <job_id>/<git_commit_short> — stable across restarts.
     UpdateID string `json:"update_id"`
 
@@ -168,12 +168,12 @@ specific version with `Jobs.Revert()`.
 
 ## Restart safety and recovery
 
-nomad-botherer must be able to die at any instant — mid-apply, mid-rollout,
+nomad-gitops must be able to die at any instant — mid-apply, mid-rollout,
 between detection and apply — and recover without an operator noticing
 anything beyond a metrics gap. The design rule that makes this possible:
 
 **All durable truth lives in Git (desired state) and Nomad (actual state plus
-`JobModifyIndex`). Anything nomad-botherer holds is a cache, derivable from
+`JobModifyIndex`). Anything nomad-gitops holds is a cache, derivable from
 those two by running one diff cycle.**
 
 Recovery is therefore not a special path. Startup is: clone (in-memory),
@@ -222,12 +222,12 @@ costs nothing but a cycle.
 
 ### Dispatched Nomad job as apply executor
 
-The alternative: nomad-botherer registers a parameterized batch job
-(`nomad-botherer-apply`) once, and performs each apply by dispatching it
+The alternative: nomad-gitops registers a parameterized batch job
+(`nomad-gitops-apply`) once, and performs each apply by dispatching it
 with meta parameters — job ID, git commit, HCL path, captured
 `JobModifyIndex`. The dispatched task fetches the HCL at that exact commit,
 runs the plan + CAS register itself, and exits. Nomad supervises the
-executor, so the apply survives nomad-botherer's death entirely, and
+executor, so the apply survives nomad-gitops's death entirely, and
 in-flight applies are discoverable on startup by listing the dispatch
 children — cluster state doubling as the in-flight-work record, which is an
 attractive extension of the "state lives in Nomad" idea. Each apply also
@@ -236,14 +236,14 @@ gets a Nomad-native audit record and resource isolation for free.
 The costs are substantial, though:
 
 - The executor task needs its own Git credentials and a Nomad token with
-  submit-job rights — a secrets-distribution problem nomad-botherer
+  submit-job rights — a secrets-distribution problem nomad-gitops
   otherwise doesn't have.
 - Dispatch payloads are capped at 16 KiB, so the payload must be a pointer
   (commit + path), which forces the executor to clone the repo per apply —
   exactly the re-clone-per-cycle cost this project criticises in prior art,
   now per-update.
 - Failure handling spans two processes: the executor can fail in ways
-  nomad-botherer must then discover by polling the dispatch job's status,
+  nomad-gitops must then discover by polling the dispatch job's status,
   reintroducing the visibility machinery the in-process queue gives us
   directly.
 - Latency per apply goes from seconds to scheduler-roundtrip-plus-image-pull.
@@ -356,10 +356,10 @@ recreate pending updates within one cycle.
 
 **How it works**
 
-nomad-botherer does not apply changes autonomously. Instead, it posts a Nomad
+nomad-gitops does not apply changes autonomously. Instead, it posts a Nomad
 plan output as a GitHub commit status or pull request check whenever drift is
 detected on a push event. A human (or a separate CI job) approves or rejects
-the plan. Approval triggers a webhook back to nomad-botherer (or directly
+the plan. Approval triggers a webhook back to nomad-gitops (or directly
 triggers a Nomad job run) that performs the actual apply.
 
 ```
@@ -372,7 +372,7 @@ git push → webhook → Check() → nomad plan → post plan as GitHub status/c
 
 The approval signal can be a GitHub environment protection rule, a separate
 approval workflow, or a simple comment-based trigger parsed from the webhook
-payload. The plan output is stored transiently in nomad-botherer memory between
+payload. The plan output is stored transiently in nomad-gitops memory between
 the push and the approval; on restart it is re-generated from the current diff.
 
 **Nomad state use**: plan is run against the cluster at detection time.
@@ -384,7 +384,7 @@ rejected and a new plan must be posted.
 
 - Humans review every change before it reaches the cluster. Suitable for
   regulated environments or production clusters shared by multiple teams.
-- The plan output (already rendered by nomad-botherer's `render.go`) is a
+- The plan output (already rendered by nomad-gitops's `render.go`) is a
   natural review artefact.
 - No persistent state needed: on restart, re-plan and re-post.
 - GitHub becomes the audit log for who approved what.
@@ -429,11 +429,11 @@ without requiring log scraping.
   applied in dependency order? Nomad does not expose a dependency graph, so this
   would require an explicit ordering field in HCL or job meta.
 - **Rollback**: if a registered job's health checks fail after apply, should
-  nomad-botherer trigger `Jobs.Revert()`? This needs a separate health-check
+  nomad-gitops trigger `Jobs.Revert()`? This needs a separate health-check
   polling loop and is out of scope for an initial implementation. If it is
   ever built, it is the strongest argument for the dispatched-executor model
   in "Where the apply runs", since the watch outlives any single
-  nomad-botherer process. Researched in detail in
+  nomad-gitops process. Researched in detail in
   [automatic-rollback.md](automatic-rollback.md), which recommends leaning on
   Nomad's native `auto_revert` plus a state-free "flap-loop guard" (don't
   re-apply a spec a recent failed job version already represents) rather than

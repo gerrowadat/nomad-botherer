@@ -11,12 +11,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gerrowadat/nomad-botherer/internal/server"
+	"github.com/gerrowadat/nomad-gitops/internal/server"
 )
 
 // TestE2E_StartupLifecycle verifies that:
 //   - /healthz returns 200 once the initial git clone and diff check finish
-//     (startBotherer blocks until this transition occurs)
+//     (startGitops blocks until this transition occurs)
 //   - the response body is valid JSON with the expected fields
 func TestE2E_StartupLifecycle(t *testing.T) {
 	repoURL, workDir, branch := createGitRepo(t)
@@ -27,8 +27,8 @@ func TestE2E_StartupLifecycle(t *testing.T) {
 		jobID + ".hcl": testJobHCL(jobID),
 	})
 
-	// Start the binary. startBotherer waits for /healthz → 200.
-	baseURL := startBotherer(t,
+	// Start the binary. startGitops waits for /healthz → 200.
+	baseURL := startGitops(t,
 		"--repo-url="+repoURL,
 		"--branch="+branch,
 		"--job-selector-glob="+jobID,
@@ -71,7 +71,7 @@ func TestE2E_DriftDetectedViaHTTP(t *testing.T) {
 	registerJobHCL(t, testJobHCL(jobID))
 	waitForJobStatus(t, jobID, "running", 30*time.Second)
 
-	baseURL := startBotherer(t,
+	baseURL := startGitops(t,
 		"--repo-url="+repoURL,
 		"--branch="+branch,
 		"--job-selector-glob="+jobID,
@@ -122,7 +122,7 @@ func TestE2E_WebhookTriggersRefresh(t *testing.T) {
 	waitForJobStatus(t, jobID, "running", 30*time.Second)
 
 	// Very long poll interval so only webhooks drive refreshes.
-	baseURL := startBotherer(t,
+	baseURL := startGitops(t,
 		"--repo-url="+repoURL,
 		"--branch="+branch,
 		"--job-selector-glob="+jobID,
@@ -169,7 +169,7 @@ func TestE2E_APIDisabledByDefault(t *testing.T) {
 	repoURL, workDir, branch := createGitRepo(t)
 	commitToGit(t, workDir, map[string]string{"placeholder.hcl": "# no jobs"})
 
-	baseURL := startBotherer(t,
+	baseURL := startGitops(t,
 		"--repo-url="+repoURL,
 		"--branch="+branch,
 		"--job-selector-glob=does-not-exist",
@@ -202,7 +202,7 @@ func TestE2E_APIGetDiffs(t *testing.T) {
 	registerJobHCL(t, testJobHCL(jobID))
 	waitForJobStatus(t, jobID, "running", 30*time.Second)
 
-	baseURL := startBothererWithAPI(t, apiKey,
+	baseURL := startGitopsWithAPI(t, apiKey,
 		"--repo-url="+repoURL,
 		"--branch="+branch,
 		"--job-selector-glob="+jobID,
@@ -236,7 +236,7 @@ func TestE2E_APIGetStatus(t *testing.T) {
 
 	commitToGit(t, workDir, map[string]string{"placeholder.hcl": "# no jobs"})
 
-	baseURL := startBothererWithAPI(t, apiKey,
+	baseURL := startGitopsWithAPI(t, apiKey,
 		"--repo-url="+repoURL,
 		"--branch="+branch,
 		"--job-selector-glob=does-not-exist",
@@ -264,7 +264,7 @@ func TestE2E_APIRefresh(t *testing.T) {
 
 	commitToGit(t, workDir, map[string]string{"placeholder.hcl": "# initial"})
 
-	baseURL := startBothererWithAPI(t, apiKey,
+	baseURL := startGitopsWithAPI(t, apiKey,
 		"--repo-url="+repoURL,
 		"--branch="+branch,
 		"--poll-interval=10m",
@@ -320,7 +320,7 @@ func TestE2E_APISelectedJobs(t *testing.T) {
 	registerJobHCL(t, testJobHCL(jobID))
 	waitForJobStatus(t, jobID, "running", 30*time.Second)
 
-	baseURL := startBothererWithAPI(t, apiKey,
+	baseURL := startGitopsWithAPI(t, apiKey,
 		"--repo-url="+repoURL,
 		"--branch="+branch,
 		"--job-selector-glob="+jobID,
@@ -354,7 +354,7 @@ func TestE2E_APIVersion(t *testing.T) {
 	apiKey := "ver-key-" + randomSuffix()
 	commitToGit(t, workDir, map[string]string{"placeholder.hcl": "# no jobs"})
 
-	baseURL := startBothererWithAPI(t, apiKey,
+	baseURL := startGitopsWithAPI(t, apiKey,
 		"--repo-url="+repoURL,
 		"--branch="+branch,
 		"--job-selector-glob=does-not-exist",
@@ -381,7 +381,7 @@ func TestE2E_APISpec(t *testing.T) {
 	apiKey := "spec-key-" + randomSuffix()
 	commitToGit(t, workDir, map[string]string{"placeholder.hcl": "# no jobs"})
 
-	baseURL := startBothererWithAPI(t, apiKey,
+	baseURL := startGitopsWithAPI(t, apiKey,
 		"--repo-url="+repoURL,
 		"--branch="+branch,
 		"--job-selector-glob=does-not-exist",
@@ -436,7 +436,7 @@ func TestE2E_MetricsEndpoint(t *testing.T) {
 	repoURL, workDir, branch := createGitRepo(t)
 	commitToGit(t, workDir, map[string]string{"placeholder.hcl": "# no jobs"})
 
-	baseURL := startBotherer(t,
+	baseURL := startGitops(t,
 		"--repo-url="+repoURL,
 		"--branch="+branch,
 		"--job-selector-glob=does-not-exist",
@@ -456,9 +456,9 @@ func TestE2E_MetricsEndpoint(t *testing.T) {
 	text := string(body)
 
 	for _, metric := range []string{
-		"nomad_botherer_diff_checks_total",
-		"nomad_botherer_git_fetches_total",
-		"nomad_botherer_info",
+		"nomad_gitops_diff_checks_total",
+		"nomad_gitops_git_fetches_total",
+		"nomad_gitops_info",
 	} {
 		if !strings.Contains(text, metric) {
 			t.Errorf("metric %q not found in /metrics output", metric)

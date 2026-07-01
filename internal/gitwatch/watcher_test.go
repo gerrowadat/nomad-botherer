@@ -16,7 +16,7 @@ import (
 	"github.com/go-git/go-git/v5/storage/memory"
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/gerrowadat/nomad-botherer/internal/config"
+	"github.com/gerrowadat/nomad-gitops/internal/config"
 )
 
 // newTestWatcher creates a Watcher with a throwaway registry so tests don't
@@ -461,7 +461,7 @@ func TestWatcher_TriggerStale_IncrementsMetric(t *testing.T) {
 	}
 	var count float64
 	for _, mf := range mfs {
-		if mf.GetName() == "nomad_botherer_git_staleness_refreshes_total" {
+		if mf.GetName() == "nomad_gitops_git_staleness_refreshes_total" {
 			for _, m := range mf.GetMetric() {
 				count += m.GetCounter().GetValue()
 			}

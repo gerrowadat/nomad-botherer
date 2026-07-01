@@ -18,7 +18,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v6
         with:
-          images: ghcr.io/gerrowadat/nomad-botherer
+          images: ghcr.io/gerrowadat/nomad-gitops
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}

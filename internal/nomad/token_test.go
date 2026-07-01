@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gerrowadat/nomad-botherer/internal/config"
+	"github.com/gerrowadat/nomad-gitops/internal/config"
 )
 
 func writeFile(t *testing.T, path, content string) {

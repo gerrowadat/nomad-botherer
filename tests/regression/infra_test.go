@@ -22,8 +22,8 @@ import (
 	nomadapi "github.com/hashicorp/nomad/api"
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/gerrowadat/nomad-botherer/internal/config"
-	"github.com/gerrowadat/nomad-botherer/internal/nomad"
+	"github.com/gerrowadat/nomad-gitops/internal/config"
+	"github.com/gerrowadat/nomad-gitops/internal/nomad"
 )
 
 // ── Nomad lifecycle ───────────────────────────────────────────────────────────
@@ -196,7 +196,7 @@ func waitForNomadReady(addr string, timeout time.Duration) error {
 // freePort returns an unused TCP port on loopback.
 // There is an inherent TOCTOU race between closing the listener here and the
 // caller binding to the port. This is unavoidable with the binary-startup
-// protocol used by startBotherer; in practice it is benign on developer
+// protocol used by startGitops; in practice it is benign on developer
 // machines and dedicated CI hosts, but can cause rare port-conflict flakes in
 // heavily loaded environments.
 func freePort() int {
@@ -226,14 +226,14 @@ func freePorts(n int) []int {
 
 // ── Binary build ──────────────────────────────────────────────────────────────
 
-// buildBinary compiles cmd/nomad-botherer into a temp file.
+// buildBinary compiles cmd/nomad-gitops into a temp file.
 func buildBinary() (string, error) {
 	root, err := findRepoRoot()
 	if err != nil {
 		return "", err
 	}
-	out := filepath.Join(os.TempDir(), fmt.Sprintf("nomad-botherer-reg-%d", os.Getpid()))
-	cmd := exec.Command("go", "build", "-o", out, "./cmd/nomad-botherer/")
+	out := filepath.Join(os.TempDir(), fmt.Sprintf("nomad-gitops-reg-%d", os.Getpid()))
+	cmd := exec.Command("go", "build", "-o", out, "./cmd/nomad-gitops/")
 	cmd.Dir = root
 	if data, err := cmd.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("go build: %w\n%s", err, data)
@@ -450,7 +450,7 @@ job %q {
 `, jobID)
 }
 
-// testJobHCLWithMeta produces HCL that opts a job in to nomad-botherer via the
+// testJobHCLWithMeta produces HCL that opts a job in to nomad-gitops via the
 // meta block. The key name is "<prefix>_managed" — a valid HCL2 identifier, so
 // the block form (meta { ... }) can be used without quoting.
 func testJobHCLWithMeta(jobID, metaPrefix string) string {
@@ -557,16 +557,16 @@ func (m *mockGitSource) Ready() bool                 { return m.ready }
 
 // ── Full binary helpers ───────────────────────────────────────────────────────
 
-// startBotherer starts the nomad-botherer binary and waits for /healthz to
+// startGitops starts the nomad-gitops binary and waits for /healthz to
 // return 200 (meaning startup — git clone + first diff — completed). It
 // returns the HTTP base URL and registers a cleanup function.
 //
 // All extra args are passed directly to the binary. Callers MUST supply
 // --repo-url for startup to succeed.
-func startBotherer(t *testing.T, extraArgs ...string) string {
+func startGitops(t *testing.T, extraArgs ...string) string {
 	t.Helper()
 	if testBinaryPath == "" {
-		t.Skip("nomad-botherer binary unavailable (build failed at test startup)")
+		t.Skip("nomad-gitops binary unavailable (build failed at test startup)")
 	}
 
 	httpPort := freePort()
@@ -587,7 +587,7 @@ func startBotherer(t *testing.T, extraArgs ...string) string {
 
 	if err := cmd.Start(); err != nil {
 		cancel()
-		t.Fatalf("start botherer: %v", err)
+		t.Fatalf("start gitops: %v", err)
 	}
 	t.Cleanup(func() {
 		cancel()
@@ -595,17 +595,17 @@ func startBotherer(t *testing.T, extraArgs ...string) string {
 	})
 
 	if err := waitForHTTPStatus(baseURL+"/healthz", http.StatusOK, 60*time.Second); err != nil {
-		t.Fatalf("botherer not ready: %v", err)
+		t.Fatalf("gitops not ready: %v", err)
 	}
 	return baseURL
 }
 
-// startBothererWithAPI is like startBotherer but also enables the JSON API
+// startGitopsWithAPI is like startGitops but also enables the JSON API
 // by passing --api-key. Returns the HTTP base URL.
-func startBothererWithAPI(t *testing.T, apiKey string, extraArgs ...string) string {
+func startGitopsWithAPI(t *testing.T, apiKey string, extraArgs ...string) string {
 	t.Helper()
 	if testBinaryPath == "" {
-		t.Skip("nomad-botherer binary unavailable (build failed at test startup)")
+		t.Skip("nomad-gitops binary unavailable (build failed at test startup)")
 	}
 
 	httpPort := freePort()
@@ -627,7 +627,7 @@ func startBothererWithAPI(t *testing.T, apiKey string, extraArgs ...string) stri
 
 	if err := cmd.Start(); err != nil {
 		cancel()
-		t.Fatalf("start botherer (with API): %v", err)
+		t.Fatalf("start gitops (with API): %v", err)
 	}
 	t.Cleanup(func() {
 		cancel()
@@ -635,7 +635,7 @@ func startBothererWithAPI(t *testing.T, apiKey string, extraArgs ...string) stri
 	})
 
 	if err := waitForHTTPStatus(httpURL+"/healthz", http.StatusOK, 60*time.Second); err != nil {
-		t.Fatalf("botherer not ready: %v", err)
+		t.Fatalf("gitops not ready: %v", err)
 	}
 	return httpURL
 }

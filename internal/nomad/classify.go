@@ -16,10 +16,10 @@ const (
 	DiffClassNone DiffClass = iota
 	// DiffClassImageOnly means every Git-owned change is a Docker image
 	// reference (the "image" field inside a task's Config object), possibly
-	// alongside nomad-botherer's own managed-meta keys.
+	// alongside nomad-gitops's own managed-meta keys.
 	DiffClassImageOnly
 	// DiffClassManagedMetaOnly means every Git-owned change is to one of
-	// nomad-botherer's own managed-prefix meta keys (e.g. gitops_managed,
+	// nomad-gitops's own managed-prefix meta keys (e.g. gitops_managed,
 	// gitops_update_policy). These are not applied on their own by default:
 	// re-registering a running job purely to push our keys onto it is
 	// disruptive and unnecessary, since the HCL is already the source of
@@ -163,7 +163,7 @@ func (c *changeCounts) addFields(fields []*nomadapi.FieldDiff, skip map[string]b
 }
 
 // isManagedMetaName reports whether a changed field refers to one of
-// nomad-botherer's own meta keys. It accepts both a bare key name when the
+// nomad-gitops's own meta keys. It accepts both a bare key name when the
 // field is inside a Meta object (inMeta) and the wrapped "Meta[key]" form
 // anywhere, so it is robust to how different Nomad versions render meta diffs.
 func isManagedMetaName(name string, inMeta bool, metaPrefix string) bool {

@@ -1,6 +1,6 @@
 # Common use cases
 
-Recipes for the things people actually do with nomad-botherer, in roughly
+Recipes for the things people actually do with nomad-gitops, in roughly
 increasing order of how much it is allowed to write. Each is a starting point —
 follow the links for the full behaviour and edge cases.
 
@@ -15,12 +15,12 @@ your repo and cluster.
 
 Out of the box this is exactly what you get. Opt jobs in with
 `meta { gitops_managed = "true" }` (or a glob), wire up the
-[metrics and alerts](monitoring.md), and watch `nomad_botherer_drifted_jobs`.
+[metrics and alerts](monitoring.md), and watch `nomad_gitops_drifted_jobs`.
 No update-policy or apply flags needed — the default policy is `none`, so
-nomad-botherer never writes.
+nomad-gitops never writes.
 
 ```bash
-./nomad-botherer --repo-url https://github.com/myorg/nomad-jobs.git \
+./nomad-gitops --repo-url https://github.com/myorg/nomad-jobs.git \
   --nomad-addr http://nomad.example.com:4646
 ```
 
@@ -78,7 +78,7 @@ job "api-server" {
 ```
 
 Any drift is re-registered from HCL (plan-first, CAS-guarded). To also let
-nomad-botherer create the job the first time it appears in Git, add
+nomad-gitops create the job the first time it appears in Git, add
 `--enable-job-creation`. See [What gets applied](applying-changes.md#what-gets-applied-and-how).
 
 ---
@@ -89,7 +89,7 @@ nomad-botherer create the job the first time it appears in Git, add
 each one.
 
 ```bash
-./nomad-botherer --default-update-policy=full ...
+./nomad-gitops --default-update-policy=full ...
 ```
 
 Per-job `gitops_update_policy` still overrides the default in either direction
@@ -121,7 +121,7 @@ run with `--apply-existing-drift`. See
 **Goal:** deleting a job's HCL should stop the job.
 
 This is off by default and heavily gated, because it is the one destructive
-write nomad-botherer can make. With `--enable-deregister`, a job that is
+write nomad-gitops can make. With `--enable-deregister`, a job that is
 **removed from the repo entirely** (file deleted or renamed) and still carries
 `gitops_managed = "true"` with policy `full` is deregistered after a grace
 period. Removing only the `gitops_managed` line (job still in the repo) never
@@ -136,9 +136,9 @@ deletes anything — it just stops managing the job. See
 
 The best answer is Nomad-native: put `update { auto_revert = true }` with real
 health checks in the job. Nomad reverts a failed deployment itself, and
-nomad-botherer's flap-loop guard (on by default) keeps it from re-pushing the
+nomad-gitops's flap-loop guard (on by default) keeps it from re-pushing the
 known-bad spec. For jobs that do not use `auto_revert`, `--allow-rollback` lets
-nomad-botherer do the revert. See [Rollback](rollback.md).
+nomad-gitops do the revert. See [Rollback](rollback.md).
 
 ---
 

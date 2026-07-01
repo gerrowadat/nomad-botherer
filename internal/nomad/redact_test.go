@@ -6,7 +6,7 @@ import (
 
 	nomadapi "github.com/hashicorp/nomad/api"
 
-	"github.com/gerrowadat/nomad-botherer/internal/nomad"
+	"github.com/gerrowadat/nomad-gitops/internal/nomad"
 )
 
 func TestRedactJobDiff_EnvValues(t *testing.T) {

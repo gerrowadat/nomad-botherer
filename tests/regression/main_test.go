@@ -20,7 +20,7 @@ var testNomadClient *nomadapi.Client
 // testNomadVersion records the Nomad version under test (informational).
 var testNomadVersion string
 
-// testBinaryPath is the path to the compiled nomad-botherer binary.
+// testBinaryPath is the path to the compiled nomad-gitops binary.
 // It is empty when the build failed; E2E tests skip themselves in that case.
 var testBinaryPath string
 

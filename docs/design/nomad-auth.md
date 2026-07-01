@@ -3,8 +3,8 @@
 **Status**: implemented v0.9.0; **corrected in v0.9.1**. The original design
 (below) used the workload-identity token file *directly* as the Nomad token.
 That does not work: a raw WI JWT is rejected by Nomad's `Job.Plan` RPC
-(`500 … UUID must be 36 characters`), which nomad-botherer runs on every check
-([issue #74](https://github.com/gerrowadat/nomad-botherer/issues/74)). v0.9.1
+(`500 … UUID must be 36 characters`), which nomad-gitops runs on every check
+([issue #74](https://github.com/gerrowadat/nomad-gitops/issues/74)). v0.9.1
 replaces it with a **token exchange** — the JWT is exchanged for a real ACL
 token via `POST /v1/acl/login` (`--nomad-login-auth-method`) and re-exchanged
 before it expires. The file-token source (`--nomad-token-file`) remains for a
@@ -17,7 +17,7 @@ Related: [change-checkpointing.md](../proposals/change-checkpointing.md) (the
 
 ## Problem
 
-nomad-botherer authenticates to the Nomad API with an ACL token. Originally the
+nomad-gitops authenticates to the Nomad API with an ACL token. Originally the
 only source was a static token (`--nomad-token` / `NOMAD_TOKEN`). When the tool
 runs as a Nomad job on the cluster it watches — the common deployment — a static
 token is the wrong shape:
@@ -85,14 +85,14 @@ mirroring `RunApplier`, and is a no-op for the static and anonymous cases.
 
 ### No new persistent state
 
-This introduces nothing for nomad-botherer to own: the token file is written and
+This introduces nothing for nomad-gitops to own: the token file is written and
 rotated by Nomad, read-only from the tool's perspective. Consistent with "no
 external database, schedulable on any node" — the workload-identity path needs no
 volume and no secret store.
 
 ## Observability
 
-`nomad_botherer_nomad_token_refreshes_total{result}` — `rotated` when a changed
+`nomad_gitops_token_refreshes_total{result}` — `rotated` when a changed
 token is applied, `error` when the file can't be read (the previous token is
 kept). The active source (file / static / none) is logged once at startup.
 

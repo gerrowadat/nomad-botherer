@@ -16,7 +16,7 @@ import (
 	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
 	xssh "golang.org/x/crypto/ssh"
 
-	"github.com/gerrowadat/nomad-botherer/internal/config"
+	"github.com/gerrowadat/nomad-gitops/internal/config"
 )
 
 // makeDiskRepo creates a real git repository on disk with the given files

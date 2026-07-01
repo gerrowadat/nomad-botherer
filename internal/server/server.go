@@ -18,8 +18,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
-	"github.com/gerrowadat/nomad-botherer/internal/config"
-	"github.com/gerrowadat/nomad-botherer/internal/nomad"
+	"github.com/gerrowadat/nomad-gitops/internal/config"
+	"github.com/gerrowadat/nomad-gitops/internal/nomad"
 )
 
 // DiffSource is satisfied by *nomad.Differ.
@@ -80,22 +80,22 @@ func NewWithRegistry(cfg *config.Config, diffs DiffSource, git GitStatusSource, 
 		buildInfo: info,
 
 		webhookEvents: promauto.With(reg).NewCounterVec(prometheus.CounterOpts{
-			Name: "nomad_botherer_webhook_events_total",
+			Name: "nomad_gitops_webhook_events_total",
 			Help: "Total number of webhook events received, by event type.",
 		}, []string{"event"}),
 		lastWebhookSuccessGauge: promauto.With(reg).NewGauge(prometheus.GaugeOpts{
-			Name: "nomad_botherer_last_webhook_success_timestamp_seconds",
+			Name: "nomad_gitops_last_webhook_success_timestamp_seconds",
 			Help: "Unix timestamp of the most recent successfully parsed webhook.",
 		}),
 		lastWebhookFailureGauge: promauto.With(reg).NewGauge(prometheus.GaugeOpts{
-			Name: "nomad_botherer_last_webhook_failure_timestamp_seconds",
+			Name: "nomad_gitops_last_webhook_failure_timestamp_seconds",
 			Help: "Unix timestamp of the most recent webhook that failed to parse.",
 		}),
 	}
 
 	// Static info metric carrying the build version.
 	promauto.With(reg).NewGaugeVec(prometheus.GaugeOpts{
-		Name: "nomad_botherer_info",
+		Name: "nomad_gitops_info",
 		Help: "Build information.",
 	}, []string{"version"}).WithLabelValues(info.Version).Set(1)
 
@@ -193,7 +193,7 @@ var indexTmpl = template.Must(template.New("index").Parse(`<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8">
-  <title>nomad-botherer</title>
+  <title>nomad-gitops</title>
   <style>
     body { font-family: sans-serif; max-width: 640px; margin: 2em auto; color: #222; }
     h1   { margin-bottom: 0.2em; }
@@ -205,7 +205,7 @@ var indexTmpl = template.Must(template.New("index").Parse(`<!DOCTYPE html>
   </style>
 </head>
 <body>
-  <h1>nomad-botherer <small>{{.Version}}</small></h1>
+  <h1>nomad-gitops <small>{{.Version}}</small></h1>
   <p>Status:
     {{- if .Starting}}
     <span class="starting">starting — initial state not yet built</span>

@@ -10,9 +10,9 @@ import (
 	nomadapi "github.com/hashicorp/nomad/api"
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/gerrowadat/nomad-botherer/internal/config"
-	"github.com/gerrowadat/nomad-botherer/internal/nomad"
-	"github.com/gerrowadat/nomad-botherer/internal/server"
+	"github.com/gerrowadat/nomad-gitops/internal/config"
+	"github.com/gerrowadat/nomad-gitops/internal/nomad"
+	"github.com/gerrowadat/nomad-gitops/internal/server"
 )
 
 // diffsResponse builds a /diffs response with full control over the diff source.

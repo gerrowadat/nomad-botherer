@@ -1,6 +1,6 @@
-BINARY  := nomad-botherer
-MODULE  := github.com/gerrowadat/nomad-botherer
-CMD     := ./cmd/nomad-botherer
+BINARY  := nomad-gitops
+MODULE  := github.com/gerrowadat/nomad-gitops
+CMD     := ./cmd/nomad-gitops
 
 # Version is derived from the most recent git tag; falls back to "dev".
 VERSION    ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")

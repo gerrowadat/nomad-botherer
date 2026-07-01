@@ -18,24 +18,24 @@ COPY . .
 
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
     -ldflags "-X main.version=${VERSION} -X main.commit=${COMMIT} -X main.buildDate=${BUILDDATE} -s -w" \
-    -o /out/nomad-botherer \
-    ./cmd/nomad-botherer
+    -o /out/nomad-gitops \
+    ./cmd/nomad-gitops
 
 # ── runtime image ──────────────────────────────────────────────────────────────
 FROM alpine:3.21
 
-LABEL org.opencontainers.image.title="nomad-botherer" \
-      org.opencontainers.image.source="https://github.com/gerrowadat/nomad-botherer" \
+LABEL org.opencontainers.image.title="nomad-gitops" \
+      org.opencontainers.image.source="https://github.com/gerrowadat/nomad-gitops" \
       org.opencontainers.image.licenses="Apache-2.0"
 
 RUN apk add --no-cache ca-certificates tzdata && \
-    addgroup -S nomad-botherer && \
-    adduser -S -G nomad-botherer nomad-botherer
+    addgroup -S nomad-gitops && \
+    adduser -S -G nomad-gitops nomad-gitops
 
-COPY --from=builder /out/nomad-botherer /usr/local/bin/nomad-botherer
+COPY --from=builder /out/nomad-gitops /usr/local/bin/nomad-gitops
 
-USER nomad-botherer
+USER nomad-gitops
 
 EXPOSE 8080 9090
 
-ENTRYPOINT ["/usr/local/bin/nomad-botherer"]
+ENTRYPOINT ["/usr/local/bin/nomad-gitops"]

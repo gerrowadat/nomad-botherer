@@ -1,7 +1,7 @@
-# nomad-botherer
+# nomad-gitops
 
-[![Tests](https://github.com/gerrowadat/nomad-botherer/actions/workflows/test.yml/badge.svg)](https://github.com/gerrowadat/nomad-botherer/actions/workflows/test.yml)
-[![Coverage](https://raw.githubusercontent.com/wiki/gerrowadat/nomad-botherer/coverage.svg)](https://raw.githack.com/wiki/gerrowadat/nomad-botherer/coverage.html)
+[![Tests](https://github.com/gerrowadat/nomad-gitops/actions/workflows/test.yml/badge.svg)](https://github.com/gerrowadat/nomad-gitops/actions/workflows/test.yml)
+[![Coverage](https://raw.githubusercontent.com/wiki/gerrowadat/nomad-gitops/coverage.svg)](https://raw.githack.com/wiki/gerrowadat/nomad-gitops/coverage.html)
 
 Watches a remote git repo for Nomad job HCL definitions and continuously
 compares them against a live Nomad cluster. When drift is detected it logs,
@@ -25,7 +25,7 @@ Run it against a repo of HCL job files and a cluster:
 docker run -d -p 8080:8080 \
   -e GIT_REPO_URL=https://github.com/myorg/nomad-jobs.git \
   -e NOMAD_ADDR=http://nomad.example.com:4646 \
-  ghcr.io/gerrowadat/nomad-botherer:latest
+  ghcr.io/gerrowadat/nomad-gitops:latest
 ```
 
 Then opt a job in to monitoring by adding one line to its HCL and committing:
@@ -41,7 +41,7 @@ job "my-service" {
 
 `curl http://localhost:8080/healthz` shows the drift summary; `/metrics` exposes
 it to Prometheus. That is the whole default behaviour — detect and report, never
-write. See [Running nomad-botherer](docs/setup/running.md) for the binary and
+write. See [Running nomad-gitops](docs/setup/running.md) for the binary and
 in-cluster (Nomad job) deployments, and [Common use cases](docs/use-cases.md) to
 go further.
 
@@ -71,7 +71,7 @@ go further.
    `--diff-interval` (Nomad-side drift), and immediately on a
    [webhook](docs/setup/webhooks.md) push or `POST /api/v1/refresh`.
 
-nomad-botherer is a **drift detector first and a GitOps operator second**, and
+nomad-gitops is a **drift detector first and a GitOps operator second**, and
 deliberately conservative: every write is opt-in, Git is always the source of
 truth, and it holds no persistent state of its own. See
 [Design philosophy](docs/philosophy.md).
