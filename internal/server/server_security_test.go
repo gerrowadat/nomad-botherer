@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/gerrowadat/nomad-botherer/internal/config"
+	"github.com/gerrowadat/nomad-gitops/internal/config"
 )
 
 func TestHTTPServer_HasTimeouts(t *testing.T) {

@@ -1,6 +1,6 @@
 # Applying changes (GitOps mode)
 
-By default nomad-botherer only *detects* drift. It can also *apply* it —
+By default nomad-gitops only *detects* drift. It can also *apply* it —
 re-registering jobs from their HCL when Git and Nomad disagree — but every write
 is opt-in twice over: the default update policy is `none`, and first-time
 registration needs its own flag on top.
@@ -35,28 +35,28 @@ meta key name follows `--managed-meta-prefix`: with the default prefix the key
 is `gitops_update_policy`. Every job meta key and its valid values are
 catalogued in the [Meta-key reference](meta-keys.md).
 
-More generally, any meta key under the managed prefix that nomad-botherer cannot
+More generally, any meta key under the managed prefix that nomad-gitops cannot
 act on is flagged, because such keys silently change behaviour: an unknown key (a
 typo like `gitops_managd`, or `gitops.managed` with a dot) is logged at WARN, and
 a recognised key with an unusable value (such as `gitops_managed = "True"` — only
 lowercase `true`/`false` count) is logged at ERROR. Each unique issue is logged
-once per process and counted every cycle in `nomad_botherer_meta_key_issues_total`.
+once per process and counted every cycle in `nomad_gitops_meta_key_issues_total`.
 Both the HCL and the live job's meta are checked.
 
 *Changes* to these keys are tracked too: when a job gains or loses
 `gitops_managed`, switches update policy, or any prefix key appears, disappears,
-or changes value — on either the HCL side or the live job — nomad-botherer logs
+or changes value — on either the HCL side or the live job — nomad-gitops logs
 the transition at INFO with the old and new values and what it will do to honour
 the change (e.g. "job is now opted in: it will be diffed and applied per its
 effective update policy", or "opt-in removed but the job still matches
 `--job-selector-glob` and remains watched"). A manual `nomad job run` that
 silently strips the keys from the live job is logged the same way. Transitions
-are counted in `nomad_botherer_meta_key_changes_total`. The first check after
+are counted in `nomad_gitops_meta_key_changes_total`. The first check after
 startup is a baseline and logs nothing.
 
 ## Changes to our own meta keys are not, on their own, drift
 
-Because Git is the source of truth for the `gitops_*` keys, nomad-botherer reads
+Because Git is the source of truth for the `gitops_*` keys, nomad-gitops reads
 them straight from the HCL — the running job does not need to carry them for the
 tool to behave correctly. So when a commit adds or changes one of *our* keys and
 nothing else differs, that diff is **managed-meta-only**:
@@ -70,7 +70,7 @@ nothing else differs, that diff is **managed-meta-only**:
 - It is **not counted as drift** by default, so it does not show up on `/diffs`
   or `/healthz` and does not move the drift metrics — these expected differences
   should not page anyone. They are surfaced instead by
-  `nomad_botherer_meta_only_diffs_total{job}` and the meta-change logs above.
+  `nomad_gitops_meta_only_diffs_total{job}` and the meta-change logs above.
 
 Both behaviours are independently configurable: `--apply-meta-only-changes` makes
 such a diff trigger an update (subject to the normal policy — a pure meta change
@@ -91,7 +91,7 @@ changes are treated **identically**:
   you then switch it to `full`. The memory change was live drift the whole time,
   merely held back by `image-only`.
 
-In both cases the drift is **pre-existing**, and by default nomad-botherer does
+In both cases the drift is **pre-existing**, and by default nomad-gitops does
 **not** apply it. Changing a job's scope expresses intent about *future*
 reconciliation, not "deploy the backlog now": it should not, on its own, trigger
 a mutation from drift you may not have intended to ship at that moment. Only
@@ -100,10 +100,10 @@ changes committed *after* the scope change apply.
 Set `--apply-existing-drift` to apply pre-existing drift at the scope change
 instead — then the job converges to its HCL as soon as the change lands. This is
 one switch for both cases, deliberately, so enablement and policy promotion never
-diverge (see [issue #69](https://github.com/gerrowadat/nomad-botherer/issues/69)).
+diverge (see [issue #69](https://github.com/gerrowadat/nomad-gitops/issues/69)).
 
 The decision is made from **git history**, so it holds the same whether the
-change lands while nomad-botherer is running or before it starts (a fresh start
+change lands while nomad-gitops is running or before it starts (a fresh start
 or a restart). For a job's HCL file at HEAD, the rule is: a diff is pre-existing
 if it would **not** have been applied under the job's effective scope in the
 commit *before* HEAD — the job was unmanaged there, or its policy there did not
@@ -116,7 +116,7 @@ selected by `--job-selector-glob` are always in scope and have no opt-in moment,
 so this gate never applies to them. (The global `--default-update-policy` is not
 a per-job git change, so changing *that* flag is not detected as a per-job scope
 widening.) The freeze is counted in
-`nomad_botherer_updates_blocked_preexisting_total{job}`, and each held diff is
+`nomad_gitops_updates_blocked_preexisting_total{job}`, and each held diff is
 shown on `/diffs` and the API with its reason (see
 [Why a diff is or is not applied](#why-a-diff-is-or-is-not-applied)).
 
@@ -158,7 +158,7 @@ and [`design/update-policies.md`](design/update-policies.md).
 
 ## Deregistration (jobs removed from the repo)
 
-nomad-botherer does not look after jobs *going away* by default — a job either
+nomad-gitops does not look after jobs *going away* by default — a job either
 enters its purview and stays in it, or stops being GitOps-managed and is left
 running. There are two ways a managed job leaves scope, both logged:
 
@@ -188,11 +188,11 @@ but only under all of these guards:
 Deregistration is a **graceful stop** by default (the job becomes `dead` but
 stays queryable and is garbage-collected by Nomad later); `--deregister-purge`
 removes it from Nomad's state immediately. Jobs leaving management are counted in
-`nomad_botherer_jobs_left_management_total{job,reason}`.
+`nomad_gitops_jobs_left_management_total{job,reason}`.
 
 ## Why a diff is or is not applied
 
-Every diff carries an `apply_action` describing what nomad-botherer will do about
+Every diff carries an `apply_action` describing what nomad-gitops will do about
 it, so you never have to scrape logs to find out why a drift is sitting
 unapplied. It appears on `/diffs` (as a `→ …` line under each job), in the
 `/api/v1/diffs` and `/healthz` JSON (the `apply_action` field), and is documented

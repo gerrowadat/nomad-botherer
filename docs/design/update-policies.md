@@ -15,7 +15,7 @@ See the CHANGELOG.
 ## Background
 
 The [GitOps job updates proposal](gitops-job-updates.md) describes how
-nomad-botherer will apply detected drift to the cluster. That proposal treats
+nomad-gitops will apply detected drift to the cluster. That proposal treats
 apply as all-or-nothing: a job is either managed (`gitops_managed = "true"`)
 and fully reconciled, or not managed and never touched.
 
@@ -215,7 +215,7 @@ categories are wanted later (see open questions).
 ## Meta key syntax
 
 HCL2 block attribute names cannot contain dots, so the block form works for
-nomad-botherer's own keys:
+nomad-gitops's own keys:
 
 ```hcl
 meta {
@@ -251,7 +251,7 @@ of that change may be applied to Nomad automatically.
 The [Diun integration proposal](../proposals/diun-integration.md) governs the *upstream*
 direction: a newer image exists in a registry, but Git still pins the old
 tag. That is not drift — Git and Nomad agree — so no policy value causes it
-to be applied, and nomad-botherer does not even consume the notification:
+to be applied, and nomad-gitops does not even consume the notification:
 Diun notifies whoever closes that loop (a human, or a separate bumper job),
 Git gets updated by PR, and the change then flows back through this
 proposal's policy gate like any other commit.
@@ -265,7 +265,7 @@ write that is not in Git, and Diun tracking never causes a write at all.
 
 Per the metrics convention:
 
-- `nomad_botherer_updates_blocked_by_policy_total{job_id, policy}` — counter,
+- `nomad_gitops_updates_blocked_by_policy_total{job_id, policy}` — counter,
   incremented when a detected diff would have produced a `JobUpdate` but the
   effective policy filtered it out. This is the signal an operator watches to
   find jobs accumulating unapplied drift.

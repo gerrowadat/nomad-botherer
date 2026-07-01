@@ -7,8 +7,8 @@ import (
 	nomadapi "github.com/hashicorp/nomad/api"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	"github.com/gerrowadat/nomad-botherer/internal/config"
-	"github.com/gerrowadat/nomad-botherer/internal/nomad"
+	"github.com/gerrowadat/nomad-gitops/internal/config"
+	"github.com/gerrowadat/nomad-gitops/internal/nomad"
 )
 
 func intPtr(i int) *int { return &i }
@@ -311,7 +311,7 @@ func TestActiveRollback_AutoRevertWins(t *testing.T) {
 	nomad.DrainUpdates(d)
 
 	if len(reverts) != 0 {
-		t.Errorf("auto_revert always wins: nomad-botherer must not revert, got %d calls", len(reverts))
+		t.Errorf("auto_revert always wins: nomad-gitops must not revert, got %d calls", len(reverts))
 	}
 	if got := testutil.ToFloat64(nomad.Rollbacks(d).WithLabelValues("test-job", "deferred_auto_revert")); got != 1 {
 		t.Errorf("rollbacks_total{result=deferred_auto_revert}: want 1, got %v", got)

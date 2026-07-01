@@ -21,11 +21,11 @@ import (
 	nomadapi "github.com/hashicorp/nomad/api"
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/gerrowadat/nomad-botherer/internal/config"
-	"github.com/gerrowadat/nomad-botherer/internal/nomad"
+	"github.com/gerrowadat/nomad-gitops/internal/config"
+	"github.com/gerrowadat/nomad-gitops/internal/nomad"
 )
 
-// Authentication regression tests. These exercise nomad-botherer's Nomad-auth
+// Authentication regression tests. These exercise nomad-gitops's Nomad-auth
 // code paths (internal/nomad/token.go: resolveNomadToken, the file refresher,
 // and the live SetSecretID rotation) against a real ACL-enabled Nomad cluster,
 // so token handling is verified against actual ACL enforcement and across the
@@ -38,7 +38,7 @@ import (
 // "Manual token" is a static --nomad-token. "Workload identity" is the token
 // file path: under Nomad, `identity { file = true }` makes Nomad write the
 // task's identity token to ${NOMAD_SECRETS_DIR}/nomad_token and rotate it; from
-// nomad-botherer's side that is a real ACL token in a file it re-reads. These
+// nomad-gitops's side that is a real ACL token in a file it re-reads. These
 // tests provide real ACL tokens through that same file mechanism (and the
 // auto-detected path), and verify a rotated token is applied to the live client.
 
@@ -104,12 +104,12 @@ func newACLClient(t *testing.T, addr, token string) *nomadapi.Client {
 }
 
 // createReadToken creates a client token whose policy grants the read
-// capabilities nomad-botherer needs for detection, and returns the token.
+// capabilities nomad-gitops needs for detection, and returns the token.
 func createReadToken(t *testing.T, mgmt *nomadapi.Client, policyName string) *nomadapi.ACLToken {
 	t.Helper()
 	policy := &nomadapi.ACLPolicy{
 		Name:        policyName,
-		Description: "nomad-botherer auth regression test (read-only)",
+		Description: "nomad-gitops auth regression test (read-only)",
 		Rules: `namespace "default" {
   capabilities = ["list-jobs", "read-job"]
 }`,
@@ -202,7 +202,7 @@ func TestAuth_WithACLs(t *testing.T) {
 	t.Run("manual token: valid authenticates", func(t *testing.T) {
 		jobID := uniqueJobID("auth-manual-ok")
 		registerManagedJobWith(t, mgmt, jobID)
-		readTok := createReadToken(t, mgmt, "botherer-manual-"+randomSuffix())
+		readTok := createReadToken(t, mgmt, "gitops-manual-"+randomSuffix())
 
 		cfg := aclDiffCfg(addr)
 		cfg.NomadToken = readTok.SecretID
@@ -228,7 +228,7 @@ func TestAuth_WithACLs(t *testing.T) {
 		if differSeesJob(t, d, jobID, "manual-anon") {
 			t.Error("anonymous access must not see jobs on an ACL-enabled cluster")
 		}
-		if got := gatherCounter(t, reg, "nomad_botherer_nomad_api_errors_total"); got == 0 {
+		if got := gatherCounter(t, reg, "nomad_gitops_nomad_api_errors_total"); got == 0 {
 			t.Error("anonymous List should be rejected by ACLs and counted in nomad_api_errors_total")
 		}
 	})
@@ -236,10 +236,10 @@ func TestAuth_WithACLs(t *testing.T) {
 	t.Run("workload identity: explicit token file", func(t *testing.T) {
 		jobID := uniqueJobID("auth-wi-file")
 		registerManagedJobWith(t, mgmt, jobID)
-		readTok := createReadToken(t, mgmt, "botherer-wi-file-"+randomSuffix())
+		readTok := createReadToken(t, mgmt, "gitops-wi-file-"+randomSuffix())
 
 		// Write the token to a file, the way `identity { file = true }` makes
-		// Nomad expose the workload's token; nomad-botherer reads it via
+		// Nomad expose the workload's token; nomad-gitops reads it via
 		// --nomad-token-file.
 		tokenPath := filepath.Join(t.TempDir(), wiTokenFileName)
 		writeTokenFile(t, tokenPath, readTok.SecretID)
@@ -266,7 +266,7 @@ func TestAuth_WithACLs(t *testing.T) {
 		suffix := randomSuffix()
 		methodName := "gitops-login-" + suffix
 		policyName := "gitops-login-" + suffix
-		subject := "botherer-login-" + suffix
+		subject := "gitops-login-" + suffix
 
 		priv, err := rsa.GenerateKey(rand.Reader, 2048)
 		if err != nil {
@@ -319,7 +319,7 @@ func TestAuth_WithACLs(t *testing.T) {
 		jwt := mintRS256JWT(t, priv, map[string]any{
 			"aud": []string{"nomad.io"},
 			"sub": subject,
-			"iss": "botherer-test",
+			"iss": "gitops-test",
 			"iat": now.Unix(),
 			"nbf": now.Unix(),
 			"exp": now.Add(5 * time.Minute).Unix(),
@@ -335,7 +335,7 @@ func TestAuth_WithACLs(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewDifferWithRegistry: %v", err)
 		}
-		if got := gatherCounter(t, reg, "nomad_botherer_nomad_logins_total"); got == 0 {
+		if got := gatherCounter(t, reg, "nomad_gitops_nomad_logins_total"); got == 0 {
 			t.Fatal("expected a successful /v1/acl/login exchange at startup")
 		}
 		// Exercise Job.Plan specifically — the RPC that rejected raw WI JWTs and
@@ -351,8 +351,8 @@ func TestAuth_WithACLs(t *testing.T) {
 		jobID := uniqueJobID("auth-wi-rotate")
 		registerManagedJobWith(t, mgmt, jobID)
 
-		tokenA := createReadToken(t, mgmt, "botherer-rotate-a-"+randomSuffix())
-		tokenB := createReadToken(t, mgmt, "botherer-rotate-b-"+randomSuffix())
+		tokenA := createReadToken(t, mgmt, "gitops-rotate-a-"+randomSuffix())
+		tokenB := createReadToken(t, mgmt, "gitops-rotate-b-"+randomSuffix())
 
 		tokenPath := filepath.Join(t.TempDir(), wiTokenFileName)
 		writeTokenFile(t, tokenPath, tokenA.SecretID)
@@ -382,7 +382,7 @@ func TestAuth_WithACLs(t *testing.T) {
 
 		// Wait until the refresher has applied a rotated token.
 		deadline := time.Now().Add(5 * time.Second)
-		for gatherCounter(t, reg, "nomad_botherer_nomad_token_refreshes_total") == 0 {
+		for gatherCounter(t, reg, "nomad_gitops_nomad_token_refreshes_total") == 0 {
 			if time.Now().After(deadline) {
 				t.Fatal("token refresher did not apply the rotated token within 5s")
 			}

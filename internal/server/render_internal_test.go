@@ -7,7 +7,7 @@ import (
 
 	nomadapi "github.com/hashicorp/nomad/api"
 
-	"github.com/gerrowadat/nomad-botherer/internal/nomad"
+	"github.com/gerrowadat/nomad-gitops/internal/nomad"
 )
 
 // TestRenderDiffsText_ZeroLastCheck verifies that a zero lastCheck time omits

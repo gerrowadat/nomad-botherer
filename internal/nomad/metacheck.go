@@ -6,13 +6,13 @@ import (
 )
 
 // Meta-key validation: anything in a job's meta that starts with the managed
-// prefix is addressed to nomad-botherer, so a key we don't recognise — or a
+// prefix is addressed to nomad-gitops, so a key we don't recognise — or a
 // recognised key with a value we can't act on — is almost certainly a typo
 // that is silently changing behaviour (e.g. `gitops.managed` instead of
 // `gitops_managed` drops the job out of scope without a trace).
 //
 // Each unique (job, key, value, issue) is logged once per process; the
-// nomad_botherer_meta_key_issues_total counter keeps incrementing every
+// nomad_gitops_meta_key_issues_total counter keeps incrementing every
 // cycle the issue persists, so dashboards can see it without log spam.
 
 const (
@@ -33,7 +33,7 @@ func validFlapGuardValue(v string) bool {
 	return v == "history" || v == "tag" || v == "off"
 }
 
-// validateManagedMeta scans meta for keys addressed to nomad-botherer and
+// validateManagedMeta scans meta for keys addressed to nomad-gitops and
 // records an issue for any it cannot act on. source says where the meta was
 // seen ("hcl:<file>" or "nomad") for the log line.
 func (d *Differ) validateManagedMeta(jobID, source string, meta map[string]string) {
@@ -69,14 +69,14 @@ func (d *Differ) validateManagedMeta(jobID, source string, meta map[string]strin
 			}
 		default:
 			d.recordMetaIssue(jobID, source, k, v, metaIssueUnknownKey,
-				"not a key nomad-botherer understands — possible typo")
+				"not a key nomad-gitops understands — possible typo")
 		}
 	}
 }
 
 // recordMetaIssue counts the issue and logs it the first time it is seen.
 // Known keys with bad values log at ERROR — the author clearly intended to
-// configure nomad-botherer and the value is being ignored or downgraded.
+// configure nomad-gitops and the value is being ignored or downgraded.
 // Unknown keys under the prefix log at WARN.
 func (d *Differ) recordMetaIssue(jobID, source, key, value, issue, hint string) {
 	d.metaKeyIssues.WithLabelValues(jobID, issue).Inc()
@@ -86,7 +86,7 @@ func (d *Differ) recordMetaIssue(jobID, source, key, value, issue, hint string) 
 		return
 	}
 	if issue == metaIssueInvalidValue {
-		slog.Error("Job meta has a recognised nomad-botherer key with an invalid value",
+		slog.Error("Job meta has a recognised nomad-gitops key with an invalid value",
 			"job", jobID, "source", source, "key", key, "value", value, "hint", hint)
 	} else {
 		slog.Warn("Job meta has an unrecognised key under the managed prefix",

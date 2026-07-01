@@ -1,5 +1,42 @@
 # Changelog
 
+> **The project was renamed from `nomad-botherer` to `nomad-gitops` in v1.0.0.**
+> Changelog entries for v0.9.1 and earlier keep the old name and the old
+> `nomad_botherer_*` metric names, because that is what those releases actually
+> shipped.
+
+## v1.0.0 — 2026-07-01
+
+**Renamed from `nomad-botherer` to `nomad-gitops`.** This is a rename and a
+stability milestone — there are **no behaviour changes** on top of v0.9.1. 1.0.0
+marks the public surface (CLI flags, environment variables, the `gitops_*` job
+meta keys, the Prometheus metric names, the JSON API and `apply_action` values,
+and the Docker image path) as stable; future breaking changes to any of these
+will require a 2.0.0.
+
+Verified against Nomad 1.9.6, 1.10.5, 1.11.3, and 2.0.2 (full regression
+suite). See [docs/nomad-versions.md](docs/nomad-versions.md).
+
+### Breaking changes (all from the rename)
+
+- **Binary / command** renamed `nomad-botherer` → `nomad-gitops`.
+- **Docker image** moved `ghcr.io/gerrowadat/nomad-botherer` →
+  `ghcr.io/gerrowadat/nomad-gitops`. Existing `nomad-botherer` image tags
+  (including `v0.9.1`) remain at the old path; pull the new path going forward.
+- **Go module path** `github.com/gerrowadat/nomad-botherer` →
+  `github.com/gerrowadat/nomad-gitops`.
+- **All Prometheus metrics renamed** `nomad_botherer_*` → `nomad_gitops_*`, and
+  the recording-rule series `nomad_botherer:*` → `nomad_gitops:*`. **Update your
+  dashboards, alerts, and recording rules.** The shipped `monitoring/*.yml` are
+  updated, and the bundled alert names changed `NomadBotherer*` → `NomadGitops*`.
+- **GitHub repository** renamed to `nomad-gitops` (old URLs redirect).
+
+### Not changed
+
+- Environment variables, CLI flags, and the `gitops_*` job meta keys are
+  identical — no changes to your job HCL or run configuration.
+- The JSON API, `apply_action` values, and all behaviour are unchanged.
+
 ## v0.9.1 — 2026-07-01
 
 ### Fixed

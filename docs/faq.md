@@ -15,7 +15,7 @@ why. See [Job selection](job-selection.md).
 ## Drift is detected but nothing is applied
 
 This is the default and is intentional: the default update policy is `none`, so
-nomad-botherer detects and reports drift but never writes. Applying is opt-in —
+nomad-gitops detects and reports drift but never writes. Applying is opt-in —
 set a per-job `gitops_update_policy` or raise `--default-update-policy`. Every
 diff carries an `apply_action` (on `/diffs`, the API, `/healthz`) telling you
 exactly why it was or wasn't applied. See
@@ -49,12 +49,12 @@ bump into its own commit, or use `full`. See
 
 ## I changed a `gitops_*` meta key in Git but `/diffs` shows nothing
 
-A diff whose *only* change is to nomad-botherer's own meta keys (e.g. adding
+A diff whose *only* change is to nomad-gitops's own meta keys (e.g. adding
 `gitops_managed`, switching `gitops_update_policy`) is **managed-meta-only**: by
 default it is neither counted as drift nor applied on its own. Re-registering a
 running job just to stamp those keys on it would be disruptive for no functional
 gain — the HCL is already authoritative, and the keys ride along the next real
-update. Surfaced instead by `nomad_botherer_meta_only_diffs_total` and the
+update. Surfaced instead by `nomad_gitops_meta_only_diffs_total` and the
 meta-change logs. `--count-meta-only-changes` / `--apply-meta-only-changes` change
 this. See
 [Changes to our own meta keys](applying-changes.md#changes-to-our-own-meta-keys-are-not-on-their-own-drift).
@@ -76,7 +76,7 @@ their HCL instead.
 
 ## My autoscaled job's count keeps differing but isn't reconciled
 
-Deliberate: for a task group with a scaling policy, nomad-botherer treats
+Deliberate: for a task group with a scaling policy, nomad-gitops treats
 `Count`/`Scaling` as owned by the autoscaler. Those changes neither trigger nor
 block an update, and a diff that is *only* autoscaler churn shows
 `apply_action: no_actionable_change`. It will not fight the autoscaler.
@@ -93,10 +93,10 @@ behaviour for jobs Git knows nothing about (a running job with no HCL). See
 
 The task's raw workload-identity **JWT** cannot be used directly as a Nomad
 token — Nomad accepts it for read RPCs but **rejects it on `Job.Plan`**, which
-nomad-botherer runs on every drift check. The fix is to **exchange** the JWT for
+nomad-gitops runs on every drift check. The fix is to **exchange** the JWT for
 a real ACL token via `POST /v1/acl/login`: set `--nomad-login-auth-method` (with
 a JWT auth method, a named identity whose `aud` matches it, and a binding rule).
-nomad-botherer does the exchange and refreshes the token before it expires. Full
+nomad-gitops does the exchange and refreshes the token before it expires. Full
 setup: [Nomad access → Workload identity](setup/nomad-access.md#workload-identity-recommended-under-nomad).
 (Also don't use `identity { env = true }`: an env token is captured once at task
 start and never refreshed.)
@@ -110,7 +110,7 @@ See [Rollback](rollback.md).
 
 ## Does it lose anything on restart?
 
-No. nomad-botherer holds no persistent state of its own — the update queue and
+No. nomad-gitops holds no persistent state of its own — the update queue and
 drift results are in memory and are rebuilt from Git and Nomad on the next diff
 cycle, which together hold all durable truth. A restart costs at most one diff
 cycle. It needs no volume and can be scheduled on any node.
@@ -123,7 +123,7 @@ apply attempts (the second is harmless thanks to CAS, but pointless).
 
 ## Does it ever write to my git repo?
 
-Never. nomad-botherer reads Git and reads/writes Nomad — nothing else. No
+Never. nomad-gitops reads Git and reads/writes Nomad — nothing else. No
 commits, no pushes, no state branch; it holds no Git write credentials. Repo
 changes always arrive by PR from humans or other automation. See
 [Design philosophy](philosophy.md).

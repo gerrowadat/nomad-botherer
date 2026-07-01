@@ -10,8 +10,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	"github.com/gerrowadat/nomad-botherer/internal/config"
-	"github.com/gerrowadat/nomad-botherer/internal/nomad"
+	"github.com/gerrowadat/nomad-gitops/internal/config"
+	"github.com/gerrowadat/nomad-gitops/internal/nomad"
 )
 
 func strPtr(s string) *string { return &s }
@@ -468,7 +468,7 @@ func TestDiffer_DriftedJobsMetric(t *testing.T) {
 	}
 	driftedJobs := map[string]float64{}
 	for _, mf := range mfs {
-		if mf.GetName() != "nomad_botherer_drifted_jobs" {
+		if mf.GetName() != "nomad_gitops_drifted_jobs" {
 			continue
 		}
 		for _, m := range mf.GetMetric() {
@@ -553,7 +553,7 @@ func TestDiffer_DriftFirstSeen_ClearedOnResolve(t *testing.T) {
 }
 
 // gatherJobDriftSince returns the value of
-// nomad_botherer_job_drift_first_seen_timestamp_seconds for the given job and
+// nomad_gitops_job_drift_first_seen_timestamp_seconds for the given job and
 // diff_type, or 0 if the metric is absent.
 func gatherJobDriftSince(t *testing.T, reg prometheus.Gatherer, job, diffType string) float64 {
 	t.Helper()
@@ -562,7 +562,7 @@ func gatherJobDriftSince(t *testing.T, reg prometheus.Gatherer, job, diffType st
 		t.Fatalf("gather: %v", err)
 	}
 	for _, mf := range mfs {
-		if mf.GetName() != "nomad_botherer_job_drift_first_seen_timestamp_seconds" {
+		if mf.GetName() != "nomad_gitops_job_drift_first_seen_timestamp_seconds" {
 			continue
 		}
 		for _, m := range mf.GetMetric() {
@@ -581,7 +581,7 @@ func gatherJobDriftSince(t *testing.T, reg prometheus.Gatherer, job, diffType st
 // TestDiffer_SkipOnUnchangedIndexAndCommit verifies that Check skips all
 // per-job API calls when both the Nomad Raft index and the git commit are
 // identical to the previous check, and still updates the last-check timestamp
-// so the NomadBothererCheckStale alert does not fire on quiet but healthy cycles.
+// so the NomadGitopsCheckStale alert does not fire on quiet but healthy cycles.
 func TestDiffer_SkipOnUnchangedIndexAndCommit(t *testing.T) {
 	mock := defaultMock()
 	infoCalls := 0
@@ -637,7 +637,7 @@ func gatherLastCheckTimestamp(t *testing.T, reg prometheus.Gatherer) float64 {
 		t.Fatalf("gather: %v", err)
 	}
 	for _, mf := range mfs {
-		if mf.GetName() == "nomad_botherer_last_check_timestamp_seconds" {
+		if mf.GetName() == "nomad_gitops_last_check_timestamp_seconds" {
 			for _, m := range mf.GetMetric() {
 				return m.GetGauge().GetValue()
 			}
@@ -859,7 +859,7 @@ func TestDiffer_ForceCheck_IncrementsStaleCounter(t *testing.T) {
 	}
 	var staleChecks float64
 	for _, mf := range mfs {
-		if mf.GetName() == "nomad_botherer_nomad_staleness_checks_total" {
+		if mf.GetName() == "nomad_gitops_nomad_staleness_checks_total" {
 			for _, m := range mf.GetMetric() {
 				staleChecks += m.GetCounter().GetValue()
 			}
@@ -1286,7 +1286,7 @@ func TestDiffer_GitIsIntent_MetaInHCLNotNomad(t *testing.T) {
 // TestDiffer_GitIsIntent_LiveKeyNeverOverridesHCL verifies that when a job's
 // HCL exists in the repo without the managed key, a stale key on the live
 // job does not select it: Git is always the source of truth for
-// nomad-botherer's own keys. The job is neither diffed nor reported as
+// nomad-gitops's own keys. The job is neither diffed nor reported as
 // missing_from_hcl.
 func TestDiffer_GitIsIntent_LiveKeyNeverOverridesHCL(t *testing.T) {
 	mock := defaultMock()

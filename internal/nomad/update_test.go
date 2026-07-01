@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/gerrowadat/nomad-botherer/internal/nomad"
+	"github.com/gerrowadat/nomad-gitops/internal/nomad"
 )
 
 func pendingUpdate(jobID, commit string) nomad.JobUpdate {

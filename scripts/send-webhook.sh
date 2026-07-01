@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Send a simulated GitHub push webhook to a running nomad-botherer instance.
+# Send a simulated GitHub push webhook to a running nomad-gitops instance.
 # Useful for local development when you want to trigger a diff check without
 # waiting for the poll interval or making an actual git push.
 #
@@ -14,7 +14,7 @@ usage() {
     cat <<USAGE
 Usage: $(basename "$0") [OPTIONS]
 
-Simulate a GitHub push webhook and POST it to a nomad-botherer instance.
+Simulate a GitHub push webhook and POST it to a nomad-gitops instance.
 
 Options:
   -u URL      Target webhook URL  (default: http://localhost:<LISTEN_ADDR port>/webhook)
@@ -27,7 +27,7 @@ Options:
 Examples:
   $(basename "$0")
   $(basename "$0") -b develop -c abc1234def5678
-  $(basename "$0") -u http://nomad-botherer.internal/webhook -s mysecret
+  $(basename "$0") -u http://nomad-gitops.internal/webhook -s mysecret
 USAGE
     exit 0
 }

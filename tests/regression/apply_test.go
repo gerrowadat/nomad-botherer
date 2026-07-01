@@ -13,7 +13,7 @@ import (
 
 	nomadapi "github.com/hashicorp/nomad/api"
 
-	"github.com/gerrowadat/nomad-botherer/internal/nomad"
+	"github.com/gerrowadat/nomad-gitops/internal/nomad"
 )
 
 // ── GitOps apply (job mutation) ───────────────────────────────────────────────
@@ -112,7 +112,7 @@ func TestApplyE2E_FullPolicyViaMeta_Converges(t *testing.T) {
 		jobID + ".hcl": testJobHCLWithPolicy(jobID, "full"),
 	})
 
-	startBotherer(t, applyArgs(repoURL, branch, jobID)...)
+	startGitops(t, applyArgs(repoURL, branch, jobID)...)
 
 	waitForTaskArgs(t, jobID, "999", 60*time.Second)
 }
@@ -133,7 +133,7 @@ func TestApplyE2E_DefaultPolicyNone_NeverWrites(t *testing.T) {
 	})
 
 	apiKey := "apply-none-key-" + randomSuffix()
-	baseURL := startBothererWithAPI(t, apiKey, applyArgs(repoURL, branch, jobID)...)
+	baseURL := startGitopsWithAPI(t, apiKey, applyArgs(repoURL, branch, jobID)...)
 
 	// Let several diff + apply cycles pass.
 	time.Sleep(8 * time.Second)
@@ -174,7 +174,7 @@ func TestApplyE2E_DefaultPolicyFullFlag_Converges(t *testing.T) {
 	})
 
 	apiKey := "apply-flag-key-" + randomSuffix()
-	baseURL := startBothererWithAPI(t, apiKey,
+	baseURL := startGitopsWithAPI(t, apiKey,
 		applyArgs(repoURL, branch, jobID, "--default-update-policy=full")...)
 
 	waitForTaskArgs(t, jobID, "999", 60*time.Second)
@@ -213,7 +213,7 @@ func TestApplyE2E_JobCreation_GatedByFlag(t *testing.T) {
 			jobID + ".hcl": testJobHCL(jobID),
 		})
 
-		startBotherer(t, applyArgs(repoURL, branch, jobID, "--default-update-policy=full")...)
+		startGitops(t, applyArgs(repoURL, branch, jobID, "--default-update-policy=full")...)
 
 		time.Sleep(8 * time.Second)
 
@@ -232,7 +232,7 @@ func TestApplyE2E_JobCreation_GatedByFlag(t *testing.T) {
 			jobID + ".hcl": testJobHCL(jobID),
 		})
 
-		startBotherer(t, applyArgs(repoURL, branch, jobID,
+		startGitops(t, applyArgs(repoURL, branch, jobID,
 			"--default-update-policy=full", "--enable-job-creation")...)
 
 		waitForJobStatus(t, jobID, "running", 60*time.Second)
@@ -254,7 +254,7 @@ func TestApplyE2E_ImageOnlyPolicy_BlocksNonImageChange(t *testing.T) {
 		jobID + ".hcl": testJobHCLWithPolicy(jobID, "image-only"),
 	})
 
-	startBotherer(t, applyArgs(repoURL, branch, jobID)...)
+	startGitops(t, applyArgs(repoURL, branch, jobID)...)
 
 	time.Sleep(8 * time.Second)
 
@@ -307,7 +307,7 @@ func TestApplyE2E_OptInViaGitCommit_Converges(t *testing.T) {
 	})
 
 	// Deliberately no --job-selector-glob: meta-only selection.
-	startBotherer(t,
+	startGitops(t,
 		"--repo-url="+repoURL,
 		"--branch="+branch,
 		"--apply-interval=1s",
@@ -329,7 +329,7 @@ func TestApplyE2E_OptInViaGitCommit_Converges(t *testing.T) {
 }
 
 // TestApplyE2E_MetaOnlyChange_LeavesJobAloneByDefault verifies that a commit
-// adding only nomad-botherer's own meta keys to a running job is not applied
+// adding only nomad-gitops's own meta keys to a running job is not applied
 // and not counted as drift by default — the disruptive re-register is
 // avoided and no alert fires. This also exercises the real Nomad plan-diff
 // format for meta against the classifier.
@@ -348,7 +348,7 @@ func TestApplyE2E_MetaOnlyChange_LeavesJobAloneByDefault(t *testing.T) {
 	})
 
 	apiKey := "meta-only-key-" + randomSuffix()
-	baseURL := startBothererWithAPI(t, apiKey, applyArgs(repoURL, branch, jobID)...)
+	baseURL := startGitopsWithAPI(t, apiKey, applyArgs(repoURL, branch, jobID)...)
 
 	time.Sleep(8 * time.Second)
 
@@ -386,7 +386,7 @@ func TestApplyE2E_MetaOnlyChange_AppliedWithFlag(t *testing.T) {
 		jobID + ".hcl": testJobHCLWithPolicy(jobID, "full"),
 	})
 
-	startBotherer(t, applyArgs(repoURL, branch, jobID, "--apply-meta-only-changes")...)
+	startGitops(t, applyArgs(repoURL, branch, jobID, "--apply-meta-only-changes")...)
 
 	deadline := time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
@@ -401,7 +401,7 @@ func TestApplyE2E_MetaOnlyChange_AppliedWithFlag(t *testing.T) {
 
 // TestApplyE2E_ExistingDrift reproduces the "opt a drifted job in" scenario:
 // a running job already differs from its HCL (args), then the gitops meta tag
-// is added by a later commit while nomad-botherer is watching. By default the
+// is added by a later commit while nomad-gitops is watching. By default the
 // pre-existing drift is not applied; with --apply-existing-drift it is.
 func TestApplyE2E_ExistingDrift(t *testing.T) {
 	run := func(t *testing.T, applyExisting bool) (jobID, baseURL string) {
@@ -420,7 +420,7 @@ func TestApplyE2E_ExistingDrift(t *testing.T) {
 		if applyExisting {
 			extra = append(extra, "--apply-existing-drift")
 		}
-		baseURL = startBotherer(t, extra...)
+		baseURL = startGitops(t, extra...)
 
 		// Let it observe the out-of-scope job for a couple of cycles.
 		time.Sleep(3 * time.Second)
@@ -446,7 +446,7 @@ func TestApplyE2E_ExistingDrift(t *testing.T) {
 }
 
 // TestApplyE2E_ExistingDrift_AtStartup verifies the git-history-based gate
-// works when nomad-botherer starts up already pointing at the opt-in commit
+// works when nomad-gitops starts up already pointing at the opt-in commit
 // (it did not witness the tag being added). The job ran drifted, the drift and
 // then the tag were committed, and only then is the binary started.
 func TestApplyE2E_ExistingDrift_AtStartup(t *testing.T) {
@@ -468,7 +468,7 @@ func TestApplyE2E_ExistingDrift_AtStartup(t *testing.T) {
 		if applyExisting {
 			extra = append(extra, "--apply-existing-drift")
 		}
-		startBotherer(t, extra...)
+		startGitops(t, extra...)
 		return jobID
 	}
 
@@ -514,7 +514,7 @@ func TestApplyE2E_PolicyPromotion(t *testing.T) {
 		if applyExisting {
 			extra = append(extra, "--apply-existing-drift")
 		}
-		startBotherer(t, extra...)
+		startGitops(t, extra...)
 		return jobID
 	}
 
@@ -561,7 +561,7 @@ func TestDeregisterE2E_RemovedFromRepo(t *testing.T) {
 		if enable {
 			extra = append(extra, "--enable-deregister")
 		}
-		startBotherer(t, extra...)
+		startGitops(t, extra...)
 		return jobID
 	}
 

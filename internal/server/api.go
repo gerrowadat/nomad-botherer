@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/gerrowadat/nomad-botherer/internal/nomad"
+	"github.com/gerrowadat/nomad-gitops/internal/nomad"
 )
 
 // BuildInfo holds version metadata injected at link time.
@@ -166,7 +166,7 @@ func (s *Server) handleAPISpec(w http.ResponseWriter, r *http.Request) {
 const openAPISpec = `{
   "openapi": "3.0.3",
   "info": {
-    "title": "nomad-botherer",
+    "title": "nomad-gitops",
     "description": "Query drift state between a Git repo and a Nomad cluster.",
     "version": "v1"
   },

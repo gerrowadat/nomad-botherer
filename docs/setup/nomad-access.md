@@ -1,10 +1,10 @@
 # Nomad access (authentication)
 
-When the cluster has ACLs enabled, nomad-botherer needs an ACL token to call the
+When the cluster has ACLs enabled, nomad-gitops needs an ACL token to call the
 Nomad API. It picks one from these sources, in precedence order:
 
 1. **Workload-identity login** (`--nomad-login-auth-method`) — the way to use
-   Nomad workload identity. nomad-botherer exchanges the task's identity **JWT**
+   Nomad workload identity. nomad-gitops exchanges the task's identity **JWT**
    for a real ACL token via `POST /v1/acl/login`, and re-exchanges it before it
    expires. See [Workload identity](#workload-identity-recommended-under-nomad).
 2. **A token file** (`--nomad-token-file` / `NOMAD_TOKEN_FILE`) — a real ACL
@@ -21,16 +21,16 @@ The chosen source is logged at startup.
 
 > **Why not just use the identity JWT as a token?** A raw workload-identity JWT
 > authenticates *read* RPCs, but Nomad's `Job.Plan` RPC rejects it
-> (`500 … UUID must be 36 characters`), and nomad-botherer runs a plan on every
+> (`500 … UUID must be 36 characters`), and nomad-gitops runs a plan on every
 > drift check. So the JWT must be *exchanged* for an ACL token — that is what
 > login mode does. (See
-> [issue #74](https://github.com/gerrowadat/nomad-botherer/issues/74).) A
+> [issue #74](https://github.com/gerrowadat/nomad-gitops/issues/74).) A
 > previous version tried to use the JWT directly; that did not work.
 
 ## Workload identity (recommended under Nomad)
 
 This gives the job API access with no long-lived token to manage — the identity
-JWT is short-lived and Nomad-issued, and nomad-botherer exchanges and refreshes
+JWT is short-lived and Nomad-issued, and nomad-gitops exchanges and refreshes
 it automatically. It has a few one-time cluster prerequisites.
 
 ### 1. A JWT auth method
@@ -56,7 +56,7 @@ nomad acl auth-method create -name nomad-workloads -type JWT \
   -max-token-ttl 30m -token-locality local -config @nomad-workloads.hcl
 ```
 
-`max_token_ttl` bounds how long each exchanged token is valid — nomad-botherer
+`max_token_ttl` bounds how long each exchanged token is valid — nomad-gitops
 re-logins before it expires. `bound_audiences` must match the identity's `aud`
 (next step).
 
@@ -67,7 +67,7 @@ Give the task an `identity` block whose `aud` matches the auth method's
 not match a custom auth method**, so use a named identity:
 
 ```hcl
-task "nomad-botherer" {
+task "nomad-gitops" {
   identity {
     name = "nomad-api"
     aud  = ["nomad.io"]
@@ -82,11 +82,11 @@ never refreshed.
 
 ### 3. A binding rule mapping the job to a policy
 
-Write the policy nomad-botherer needs and a binding rule that grants it to this
+Write the policy nomad-gitops needs and a binding rule that grants it to this
 job's identity on login:
 
 ```hcl
-# nomad-botherer-policy.hcl
+# nomad-gitops-policy.hcl
 namespace "default" {
   # read-job + list-jobs: detect drift. submit-job: plan, register, deregister,
   # revert (the apply side). Drop submit-job for a detection-only deployment.
@@ -95,18 +95,18 @@ namespace "default" {
 ```
 
 ```bash
-nomad acl policy apply nomad-botherer nomad-botherer-policy.hcl
+nomad acl policy apply nomad-gitops nomad-gitops-policy.hcl
 
 nomad acl binding-rule create \
   -auth-method nomad-workloads -bind-type policy \
-  -bind-name nomad-botherer \
-  -selector 'value.nomad_job_id == "nomad-botherer"'
+  -bind-name nomad-gitops \
+  -selector 'value.nomad_job_id == "nomad-gitops"'
 ```
 
 `submit-job` is required for `Job.Plan` even in detection-only mode — Nomad's
 plan RPC needs it. (There is no read-only capability that covers plan.)
 
-### 4. Point nomad-botherer at the login
+### 4. Point nomad-gitops at the login
 
 Set the auth method (this enables login mode) and the JWT file:
 
@@ -116,14 +116,14 @@ NOMAD_LOGIN_JWT_FILE    = "${NOMAD_SECRETS_DIR}/nomad_nomad-api.jwt"
 ```
 
 On startup you'll see `Obtained a Nomad ACL token via workload-identity login`
-with the token's expiry; nomad-botherer re-logins at roughly half that interval.
+with the token's expiry; nomad-gitops re-logins at roughly half that interval.
 The `--nomad-login-jwt-file` default is `${NOMAD_SECRETS_DIR}/nomad_token` (the
 default identity); set it explicitly to the named-identity file as above.
 
 ## Sidecar alternative (no native login)
 
 If you cannot use native login, a sidecar can perform the `/v1/acl/login`
-exchange and write the resulting SecretID to a shared file, and nomad-botherer
+exchange and write the resulting SecretID to a shared file, and nomad-gitops
 reads it via `--nomad-token-file`. Native login is simpler and needs no sidecar.
 
 ## Static token (manual / testing)
@@ -131,9 +131,9 @@ reads it via `--nomad-token-file`. Native login is simpler and needs no sidecar.
 Running the binary by hand, pass a real ACL token SecretID:
 
 ```bash
-NOMAD_TOKEN=$(nomad acl token self -t …) ./nomad-botherer --repo-url …
+NOMAD_TOKEN=$(nomad acl token self -t …) ./nomad-gitops --repo-url …
 # or
-./nomad-botherer --nomad-token <secret-id> --repo-url …
+./nomad-gitops --nomad-token <secret-id> --repo-url …
 ```
 
 A static token does not refresh, so it is fine for manual use but unsuitable for

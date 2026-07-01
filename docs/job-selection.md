@@ -1,6 +1,6 @@
 # Job selection
 
-nomad-botherer does not watch every job in a cluster by default. A job must
+nomad-gitops does not watch every job in a cluster by default. A job must
 match at least one of the configured selection criteria to be diffed:
 
 | Criterion | Flag | Default |
@@ -13,19 +13,19 @@ has the `<prefix>_managed` meta key set to `"true"`. With the defaults (no glob,
 prefix `gitops`), only jobs declaring `gitops_managed = "true"` in their
 registered Nomad meta are watched.
 
-The prefix is a namespace for all meta keys nomad-botherer reads or writes.
+The prefix is a namespace for all meta keys nomad-gitops reads or writes.
 Using `gitops` means the opt-in key is `gitops_managed`, and other attributes
 follow the same `gitops_<attribute>` pattern. The full set is catalogued in the
 [Meta-key reference](meta-keys.md).
 
 If you need to change the prefix — for example because another team already owns
 `gitops_*` on the cluster — keep `gitops` as a root and append your qualifier:
-`gitops_myteam`, `gitops_platform`, etc. This keeps all nomad-botherer keys
+`gitops_myteam`, `gitops_platform`, etc. This keeps all nomad-gitops keys
 visually grouped across teams and avoids conflicts with unrelated meta keys.
 
 ## Git is the source of truth for the meta key
 
-**Git is always — always — the source of truth for nomad-botherer's own
+**Git is always — always — the source of truth for nomad-gitops's own
 behaviour.** There is deliberately no flag to change this. Concretely, when a
 job has an HCL file in the watched repo, that file alone decides whether the job
 is managed and under which update policy:
@@ -64,30 +64,30 @@ job "my-service" {
 **Watching all jobs in a directory:**
 
 ```bash
-./nomad-botherer --job-selector-glob='*' ...
+./nomad-gitops --job-selector-glob='*' ...
 ```
 
 **Watching a named prefix:**
 
 ```bash
-./nomad-botherer --job-selector-glob='production-*' ...
+./nomad-gitops --job-selector-glob='production-*' ...
 ```
 
 **Changing the meta prefix** (useful when sharing a cluster with multiple teams
 or tools):
 
 ```bash
-./nomad-botherer --managed-meta-prefix='gitops_myteam' ...
+./nomad-gitops --managed-meta-prefix='gitops_myteam' ...
 # opts in jobs with meta { gitops_myteam_managed = "true" }
 ```
 
-Keeping `gitops` as the root of a custom prefix makes all nomad-botherer keys
+Keeping `gitops` as the root of a custom prefix makes all nomad-gitops keys
 easy to identify across a shared cluster.
 
 **Disabling meta-based selection entirely** (glob only):
 
 ```bash
-./nomad-botherer --managed-meta-prefix='' --job-selector-glob='myprefix-*' ...
+./nomad-gitops --managed-meta-prefix='' --job-selector-glob='myprefix-*' ...
 ```
 
 If both `--job-selector-glob` and `--managed-meta-prefix` are empty, no jobs are

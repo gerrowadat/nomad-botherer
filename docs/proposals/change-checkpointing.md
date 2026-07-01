@@ -7,7 +7,7 @@
 ## Background
 
 The async update queue described in the GitOps job updates proposal is
-in-memory. When nomad-botherer restarts — upgrade, crash, or eviction — any
+in-memory. When nomad-gitops restarts — upgrade, crash, or eviction — any
 updates that were `PENDING` or `IN_PROGRESS` are lost. The next diff cycle
 recreates them, so correctness is not compromised, but there is a window where
 an apply was already sent to Nomad but the outcome was never recorded, and a
@@ -32,7 +32,7 @@ database, and records one considered-and-rejected alternative.
 
 ## Requirements
 
-- Survive a nomad-botherer process restart without losing knowledge of which
+- Survive a nomad-gitops process restart without losing knowledge of which
   updates were applied and which are still pending.
 - Resume a partial rollout rather than re-deriving intent from scratch on every
   restart.
@@ -41,7 +41,7 @@ database, and records one considered-and-rejected alternative.
   talks to (Nomad, Git).
 - **Be an optimisation, never a correctness dependency.** All durable truth
   lives in Git (desired state) and Nomad (actual state, `JobModifyIndex`);
-  if the checkpoint store is empty, stale, or unreachable, nomad-botherer
+  if the checkpoint store is empty, stale, or unreachable, nomad-gitops
   must fall back to recomputing intent from one diff cycle and remain
   correct — degraded only in visibility and audit, never in behaviour. In
   particular, no apply decision may *require* checkpoint data: idempotency
@@ -49,7 +49,7 @@ database, and records one considered-and-rejected alternative.
   rechecking live state immediately before the call, not from remembered
   intent. See "Restart safety and recovery" in
   [gitops-job-updates.md](../design/gitops-job-updates.md). This rule is
-  exception-free: anything that would require nomad-botherer to hold
+  exception-free: anything that would require nomad-gitops to hold
   non-recomputable state belongs outside the tool (the
   [Diun integration proposal](diun-integration.md) keeps once-only
   notification delivery outside the boundary for exactly this reason).
@@ -64,7 +64,7 @@ Nomad 1.4+ includes a built-in key-value store called Nomad Variables, backed
 by Raft and replicated across the cluster. Variables have ACL integration,
 support CAS (check-and-set via `ModifyIndex`), and survive cluster restarts.
 
-nomad-botherer writes one Variable per in-flight rollout at a well-known path:
+nomad-gitops writes one Variable per in-flight rollout at a well-known path:
 
 ```
 nomad/jobs/gitops/checkpoints/<git_commit>
@@ -76,7 +76,7 @@ commit is enqueued and updated atomically as each update transitions through
 `PENDING → IN_PROGRESS → SUCCEEDED/FAILED`. When all updates for a commit reach
 a terminal state, the Variable is deleted (or left for audit; configurable).
 
-On startup, nomad-botherer reads all Variables under
+On startup, nomad-gitops reads all Variables under
 `nomad/jobs/gitops/checkpoints/` and rehydrates the in-memory queue from any
 non-terminal updates. Updates that were `IN_PROGRESS` are reset to `PENDING`
 and retried (the CAS token from `JobModifyIndex` prevents double-apply harm).
@@ -85,7 +85,7 @@ and retried (the CAS token from `JobModifyIndex` prevents double-apply harm).
 
 Nomad Variables use the same Raft log as job state. A Variable write returns a
 `ModifyIndex` that can be used for CAS on the next update, ensuring that two
-concurrent nomad-botherer instances (e.g., during a rolling upgrade) cannot
+concurrent nomad-gitops instances (e.g., during a rolling upgrade) cannot
 write conflicting checkpoint data. The instance that loses the CAS retries after
 re-reading the Variable.
 
@@ -115,7 +115,7 @@ The Nomad client already exists in the process; this adds usage of
 
 - No new infrastructure. Nomad is already a hard dependency.
 - Raft-backed durability and replication match the cluster's own guarantees.
-- CAS prevents split-brain between concurrent nomad-botherer instances.
+- CAS prevents split-brain between concurrent nomad-gitops instances.
 - ACLs on Variable paths can restrict who can read or modify checkpoint state.
 - Nomad's built-in UI shows Variables; operators can inspect checkpoints without
   extra tooling.
@@ -145,7 +145,7 @@ rejection as the concurrency control. Its attraction was the audit trail —
 every state transition an immutable commit, inspectable with stock Git
 tooling.
 
-It is rejected on principle: **nomad-botherer never writes to Git.** The
+It is rejected on principle: **nomad-gitops never writes to Git.** The
 tool reads Git and reads/writes Nomad; repo changes of any kind arrive by PR
 from humans or external automation, and the tool holds no Git write
 credentials. Beyond the principle, the practical costs were real too — a
@@ -160,7 +160,7 @@ in this file's Git history if the reasoning ever needs revisiting.
 
 **The pattern**
 
-Rather than nomad-botherer managing every job it finds in Git, jobs must opt in
+Rather than nomad-gitops managing every job it finds in Git, jobs must opt in
 to GitOps management by declaring a meta key in their HCL:
 
 ```hcl
@@ -172,7 +172,7 @@ job "api-server" {
 }
 ```
 
-nomad-botherer reads this key from both the parsed HCL and the live job
+nomad-gitops reads this key from both the parsed HCL and the live job
 (`Jobs.Info()`) to decide whether to include a job in its reconciliation scope.
 A job without `gitops_managed = "true"` is skipped entirely — no diff, no
 apply, no deregister. The meta key is a scope selector, not a state store.
@@ -260,7 +260,7 @@ job "api-server" {
 }
 ```
 
-nomad-botherer behaviour with this flag (as implemented, Git is always the
+nomad-gitops behaviour with this flag (as implemented, Git is always the
 source of truth: when a job has an HCL file, the HCL key alone decides
 selection in both directions; the live key only matters for jobs without an
 HCL file):
@@ -272,7 +272,7 @@ HCL file):
   to the job's `meta` stanza.
 - A live job that does not have `gitops_managed` is never flagged as
   `missing_from_hcl`, even if it has no corresponding HCL file. This prevents
-  nomad-botherer from attempting to deregister manually-registered jobs.
+  nomad-gitops from attempting to deregister manually-registered jobs.
 
 **Effect on the differ**
 
@@ -311,10 +311,10 @@ there is no meta drift from this write.
   HCL. Easy to forget; there is no directory-level default.
 - The key appears as `NOMAD_META_gitops_managed` in every allocation's
   environment, which is minor but visible noise.
-- Nomad has no server-side filtering by meta value. nomad-botherer must list
+- Nomad has no server-side filtering by meta value. nomad-gitops must list
   all jobs and filter client-side, which is the same cost as today.
 - If a job is registered manually from an HCL file that lacks the opt-in key,
-  but the canonical HCL in Git does have it, nomad-botherer sees a `modified`
+  but the canonical HCL in Git does have it, nomad-gitops sees a `modified`
   diff and will re-register the job with the key present. This is correct GitOps
   behaviour but will surprise operators the first time they encounter it.
 
@@ -368,20 +368,20 @@ rule. The opt-in flag is orthogonal to this
 interface and should be a config-level default (`--gitops-opt-in-key`, default:
 `gitops_managed`) so teams can rename it if they have a key naming convention.
 When customising the prefix, keeping `gitops` as a root (e.g. `gitops_myteam`)
-is recommended so all nomad-botherer keys remain visually grouped across teams.
+is recommended so all nomad-gitops keys remain visually grouped across teams.
 
 ---
 
 ## Open questions
 
 - **Variable path prefix**: should the path be configurable
-  (`--nomad-variable-prefix`) to allow multiple nomad-botherer instances
+  (`--nomad-variable-prefix`) to allow multiple nomad-gitops instances
   managing different namespaces to coexist without collision?
 - **Cleanup policy**: should terminal checkpoints be deleted immediately or
   retained for a configurable duration (e.g., `--checkpoint-retention 24h`)
   for post-hoc debugging?
 - **IN_PROGRESS fence**: if a Variable shows `IN_PROGRESS` on startup (the
-  previous instance crashed mid-apply), should nomad-botherer immediately
+  previous instance crashed mid-apply), should nomad-gitops immediately
   retry, wait one diff interval, or require manual intervention? Retrying is
   safe due to CAS, but may surprise operators who want to inspect state before
   resuming.

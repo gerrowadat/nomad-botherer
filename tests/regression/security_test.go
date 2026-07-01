@@ -17,9 +17,9 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/gerrowadat/nomad-botherer/internal/config"
-	"github.com/gerrowadat/nomad-botherer/internal/nomad"
-	"github.com/gerrowadat/nomad-botherer/internal/server"
+	"github.com/gerrowadat/nomad-gitops/internal/config"
+	"github.com/gerrowadat/nomad-gitops/internal/nomad"
+	"github.com/gerrowadat/nomad-gitops/internal/server"
 )
 
 // ── Webhook security ──────────────────────────────────────────────────────────

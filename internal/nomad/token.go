@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gerrowadat/nomad-botherer/internal/config"
+	"github.com/gerrowadat/nomad-gitops/internal/config"
 )
 
 // Authentication to the Nomad API. Modes, in precedence order:
@@ -20,7 +20,7 @@ import (
 //     use Nomad workload identity. The identity JWT is exchanged for a real ACL
 //     token (SecretID) via POST /v1/acl/login, and re-exchanged before it
 //     expires. A raw WI JWT authenticates read RPCs but is *rejected* by
-//     Nomad's Job.Plan RPC ("UUID must be 36 characters"), which nomad-botherer
+//     Nomad's Job.Plan RPC ("UUID must be 36 characters"), which nomad-gitops
 //     needs for every drift check — so the JWT cannot be used directly as a
 //     token (issue #74). Login exchange is the fix.
 //  2. A token file (--nomad-token-file) — a real ACL SecretID in a file, re-read

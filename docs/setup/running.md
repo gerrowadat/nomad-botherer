@@ -1,6 +1,6 @@
-# Running nomad-botherer
+# Running nomad-gitops
 
-nomad-botherer needs two things: a git repo containing your Nomad HCL job
+nomad-gitops needs two things: a git repo containing your Nomad HCL job
 definitions, and a Nomad cluster to compare them against. Out of the box it
 only *detects* drift and never writes — see
 [Applying changes](../applying-changes.md) to turn on reconciliation.
@@ -23,11 +23,11 @@ After it starts, [opt jobs in to monitoring](#opt-jobs-in-to-monitoring).
 
 ## As a Nomad job
 
-The most common deployment is to run nomad-botherer as a Nomad job on the same
-cluster it watches. [`examples/nomad-botherer.hcl`](../../examples/nomad-botherer.hcl)
+The most common deployment is to run nomad-gitops as a Nomad job on the same
+cluster it watches. [`examples/nomad-gitops.hcl`](../../examples/nomad-gitops.hcl)
 is a ready-to-use job definition with every configuration option commented.
 
-1. Copy `examples/nomad-botherer.hcl` into your job repo (or download it).
+1. Copy `examples/nomad-gitops.hcl` into your job repo (or download it).
 
 2. Set the required values in the `env {}` block:
    - `GIT_REPO_URL` — the URL of your HCL repo
@@ -47,13 +47,13 @@ is a ready-to-use job definition with every configuration option commented.
 
 5. Submit the job:
    ```bash
-   nomad job run nomad-botherer.hcl
+   nomad job run nomad-gitops.hcl
    ```
 
-6. Watch startup — nomad-botherer clones the repo and runs its first diff check
+6. Watch startup — nomad-gitops clones the repo and runs its first diff check
    before reporting healthy:
    ```bash
-   nomad job status nomad-botherer
+   nomad job status nomad-gitops
    curl http://<alloc-ip>:8080/healthz
    ```
    `/healthz` returns `HTTP 503` with `"status": "starting"` until the first
@@ -67,7 +67,7 @@ reports (all git state is held in memory, nothing is written to disk).
 ## As a standalone binary
 
 ```bash
-./nomad-botherer \
+./nomad-gitops \
   --repo-url https://github.com/myorg/nomad-jobs.git \
   --nomad-addr http://nomad.example.com:4646
 ```
@@ -82,7 +82,7 @@ A few more starting points:
 **Public repo, Nomad without ACLs:**
 
 ```bash
-./nomad-botherer \
+./nomad-gitops \
   --repo-url https://github.com/myorg/nomad-jobs.git \
   --nomad-addr http://nomad.example.com:4646
 ```
@@ -92,7 +92,7 @@ A few more starting points:
 ```bash
 export GIT_TOKEN=ghp_...
 export NOMAD_TOKEN=...
-./nomad-botherer \
+./nomad-gitops \
   --repo-url https://github.com/myorg/nomad-jobs.git \
   --nomad-addr http://nomad.example.com:4646 \
   --hcl-dir jobs
@@ -101,7 +101,7 @@ export NOMAD_TOKEN=...
 **Private repo via SSH key:**
 
 ```bash
-./nomad-botherer \
+./nomad-gitops \
   --repo-url git@github.com:myorg/nomad-jobs.git \
   --git-ssh-key ~/.ssh/id_ed25519 \
   --nomad-addr http://nomad.example.com:4646
@@ -120,7 +120,7 @@ docker run -d \
   -e NOMAD_ADDR=http://nomad.example.com:4646 \
   -e NOMAD_TOKEN=... \
   -p 8080:8080 \
-  ghcr.io/gerrowadat/nomad-botherer:latest
+  ghcr.io/gerrowadat/nomad-gitops:latest
 ```
 
 **With an SSH git remote:**
@@ -132,7 +132,7 @@ docker run -d \
   -v /path/to/id_ed25519:/run/secrets/ssh_key:ro \
   -e NOMAD_ADDR=http://nomad.example.com:4646 \
   -p 8080:8080 \
-  ghcr.io/gerrowadat/nomad-botherer:latest
+  ghcr.io/gerrowadat/nomad-gitops:latest
 ```
 
 To enable the JSON API, add `-e API_KEY=your-api-key`. Supported platforms:
@@ -142,7 +142,7 @@ To enable the JSON API, add `-e API_KEY=your-api-key`. Supported platforms:
 
 ## Opt jobs in to monitoring
 
-By default, nomad-botherer only watches jobs that declare a `gitops_managed`
+By default, nomad-gitops only watches jobs that declare a `gitops_managed`
 meta key. Add this to any job you want monitored:
 
 ```hcl
@@ -155,7 +155,7 @@ job "my-service" {
 ```
 
 Jobs without this key are silently ignored, even if they are running on the
-cluster. This is intentional — it prevents nomad-botherer from reporting drift
+cluster. This is intentional — it prevents nomad-gitops from reporting drift
 on manually-managed or third-party jobs that are not in your HCL repo.
 
 To instead watch jobs by name pattern (or watch everything), use

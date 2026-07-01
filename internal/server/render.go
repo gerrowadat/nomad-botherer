@@ -8,7 +8,7 @@ import (
 
 	nomadapi "github.com/hashicorp/nomad/api"
 
-	"github.com/gerrowadat/nomad-botherer/internal/nomad"
+	"github.com/gerrowadat/nomad-gitops/internal/nomad"
 )
 
 // renderDiffsText produces a nomad-job-plan-style plain-text representation
@@ -17,7 +17,7 @@ import (
 func renderDiffsText(diffs []nomad.JobDiff, lastCheck time.Time, commit string, redactionEnabled bool) string {
 	var b strings.Builder
 
-	fmt.Fprintln(&b, "nomad-botherer diff report")
+	fmt.Fprintln(&b, "nomad-gitops diff report")
 	if !lastCheck.IsZero() {
 		fmt.Fprintf(&b, "Last check: %s | Commit: %s\n", lastCheck.Format(time.RFC3339), commit)
 	}

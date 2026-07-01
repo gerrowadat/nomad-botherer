@@ -1,9 +1,9 @@
 # Meta-key reference
 
-This is the canonical list of every job meta key nomad-botherer reads, and the
+This is the canonical list of every job meta key nomad-gitops reads, and the
 valid value for each. These keys go in a job's HCL `meta {}` block and control
 which jobs are managed and how. They are **read from Git** (the source of truth)
-and **never written** by nomad-botherer.
+and **never written** by nomad-gitops.
 
 ## The prefix
 
@@ -102,7 +102,7 @@ wins regardless. See [Rollback](rollback.md#active-rollback---allow-rollback-def
 ## Syntax
 
 HCL2 block-attribute names cannot contain dots, so the block form works for all
-of nomad-botherer's keys (they use underscores):
+of nomad-gitops's keys (they use underscores):
 
 ```hcl
 meta {
@@ -126,7 +126,7 @@ meta = {
 
 ## Validation
 
-nomad-botherer checks every meta key under the prefix on both the HCL side and
+nomad-gitops checks every meta key under the prefix on both the HCL side and
 the live job:
 
 - An **unknown key** under the prefix (a typo like `gitops_managd`, or
@@ -137,10 +137,10 @@ the live job:
   clear and the value is being ignored or downgraded.
 
 Each unique issue is logged once per process and counted every cycle in
-`nomad_botherer_meta_key_issues_total{job,issue}` (`issue` is `unknown_key` or
+`nomad_gitops_meta_key_issues_total{job,issue}` (`issue` is `unknown_key` or
 `invalid_value`). *Changes* to these keys between cycles — added, removed, or
 edited, on either the HCL or the live side — are logged at INFO with the
-consequence and counted in `nomad_botherer_meta_key_changes_total`. See
+consequence and counted in `nomad_gitops_meta_key_changes_total`. See
 [Applying changes](applying-changes.md#update-policies) for more on this tracking.
 
 ## Not a meta key: failed-version tags
@@ -148,6 +148,6 @@ consequence and counted in `nomad_botherer_meta_key_changes_total`. See
 The flap-guard `tag` mode (`gitops_flap_guard = "tag"`) writes a **Nomad job
 version tag** named `<prefix>-failed-<fingerprint>` (e.g.
 `gitops-failed-ab12cd…`). That is a version tag, not a job meta key — it is not
-something you set in HCL, and it is the one piece of state nomad-botherer writes
+something you set in HCL, and it is the one piece of state nomad-gitops writes
 into Nomad. It is listed here only so the name is not mistaken for a meta key.
 See [Rollback](rollback.md).

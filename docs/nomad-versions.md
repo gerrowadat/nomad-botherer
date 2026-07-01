@@ -1,7 +1,7 @@
 # Nomad Version Compatibility
 
 This table records which Nomad versions have been verified to work with each
-nomad-botherer release by running the full regression suite.
+nomad-gitops release by running the full regression suite.
 
 ## How to run
 
@@ -20,8 +20,9 @@ After a successful run, add a row to the table below and update `tests/regressio
 
 ## Compatibility matrix
 
-| nomad-botherer | Nomad 1.9.x | Nomad 1.10.x | Nomad 1.11.x | Nomad 2.0.x | Notes |
+| nomad-gitops | Nomad 1.9.x | Nomad 1.10.x | Nomad 1.11.x | Nomad 2.0.x | Notes |
 |----------------|:-----------:|:------------:|:------------:|:-----------:|-------|
+| v1.0.0         | ✅ 1.9.6    | ✅ 1.10.5    | ✅ 1.11.3    | ✅ 2.0.2    | Renamed from nomad-botherer; metrics `nomad_botherer_*` → `nomad_gitops_*` (no behaviour change) |
 | v0.9.1         | ✅ 1.9.6    | ✅ 1.10.5    | ✅ 1.11.3    | ✅ 2.0.2    | Workload identity fixed via `/v1/acl/login` token exchange (#74) |
 | v0.9.0         | ✅ 1.9.6    | ✅ 1.10.5    | ✅ 1.11.3    | ✅ 2.0.2    | Nomad workload-identity auth; policy-widening defers pre-existing drift (#69) |
 | v0.8.0         | ✅ 1.9.6    | ✅ 1.10.5    | ✅ 1.11.3    | ✅ 2.0.2    | Adds flap-loop guard and optional active rollback |

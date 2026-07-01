@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gerrowadat/nomad-botherer/internal/nomad"
+	"github.com/gerrowadat/nomad-gitops/internal/nomad"
 )
 
 // TestSelection_GlobExactMatch verifies that a job matching an exact glob is

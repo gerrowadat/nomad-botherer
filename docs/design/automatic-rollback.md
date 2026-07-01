@@ -37,24 +37,24 @@ state-lives-in-Git-and-Nomad principle), [update-policies.md](update-policies.md
 
 ## Background
 
-nomad-botherer applies drift by re-registering a job from its HCL. Today the
+nomad-gitops applies drift by re-registering a job from its HCL. Today the
 apply path stops at "Nomad accepted the registration": the update is marked
 `SUCCEEDED` the moment `Jobs.Register` returns, with no awareness of whether
 the resulting deployment actually became healthy. If a change is bad — the new
-image crash-loops, a config error fails health checks — nomad-botherer neither
+image crash-loops, a config error fails health checks — nomad-gitops neither
 notices nor reacts.
 
 This proposal researches how Nomad handles a bad change, surveys prior art, and
-designs the safest, most reliable way for nomad-botherer to add **optional**
+designs the safest, most reliable way for nomad-gitops to add **optional**
 automatic rollback. Two properties shape the whole design:
 
 - **No persistent state we are responsible for.** Per the checkpointing
   proposal, all durable truth lives in Git (desired state) and Nomad (actual
-  state, version history, deployment outcomes). nomad-botherer must be able to
+  state, version history, deployment outcomes). nomad-gitops must be able to
   die at any instant and recompute. A rollback feature must not introduce a
   journal, a database, or a "last-known-bad" file of our own.
 - **The flap-loop is the real hazard.** The naive failure mode is worse than
-  doing nothing: nomad-botherer applies commit `C`, the deployment fails, Nomad
+  doing nothing: nomad-gitops applies commit `C`, the deployment fails, Nomad
   (or we) revert to the prior version, the *next* diff cycle sees that Git still
   wants `C`, re-applies it, it fails again — forever. Any rollback design must
   answer "have we already tried this exact change and seen it fail?" without
@@ -63,7 +63,7 @@ automatic rollback. Two properties shape the whole design:
 ## What Nomad already does — use it first
 
 Nomad has a mature, native rollback mechanism. The single most important
-conclusion of this research is: **nomad-botherer should not reimplement
+conclusion of this research is: **nomad-gitops should not reimplement
 health-watching rollback. It should lean on Nomad's, and confine its own work
 to not fighting it and to not re-pushing a known-bad spec.**
 
@@ -90,14 +90,14 @@ exposes `Jobs.Versions()`, `Jobs.Revert()`, `Jobs.Stable()`,
 
 So for the common case — a service job that declares
 `update { auto_revert = true }` with health checks — **rollback already
-happens, correctly, without nomad-botherer involved at all.** Nomad watches
+happens, correctly, without nomad-gitops involved at all.** Nomad watches
 health, fails the deployment, and reverts to the last healthy version. This is
-the gold standard: it is in-cluster, survives nomad-botherer restarts, and is
+the gold standard: it is in-cluster, survives nomad-gitops restarts, and is
 the same machinery `nomad job run` users already rely on.
 
 ### Where native auto-revert does *not* apply
 
-The gaps are what a nomad-botherer feature could fill:
+The gaps are what a nomad-gitops feature could fill:
 
 - **Jobs with no `update` stanza, or `health_check = "task_states"` with no
   real checks.** These may not produce a meaningful deployment, or mark
@@ -143,14 +143,14 @@ The gaps are what a nomad-botherer feature could fill:
 
 ## The two problems to solve
 
-Even when leaning entirely on Nomad's `auto_revert`, nomad-botherer must handle
+Even when leaning entirely on Nomad's `auto_revert`, nomad-gitops must handle
 two things, because it is a *continuous reconciler* (Levant and `nomad job run`
 are one-shot and never see the next cycle):
 
 ### Problem 1 — Don't fight the revert (the flap-loop guard)
 
 After Nomad auto-reverts a failed deployment of commit `C`, the live job is back
-at the prior version's spec. nomad-botherer's next diff cycle compares Git
+at the prior version's spec. nomad-gitops's next diff cycle compares Git
 (which still says `C`) against the live (reverted) job, sees drift, and would
 re-register `C` — re-triggering the failure. This must be prevented, and it is
 the part the user specifically wants: *"have we tried this exact change before?"*
@@ -158,7 +158,7 @@ the part the user specifically wants: *"have we tried this exact change before?"
 ### Problem 2 — Roll back jobs Nomad won't (optional, heavier)
 
 For jobs without `auto_revert` (no deployment, or author didn't opt in),
-nomad-botherer could watch the outcome itself and call `Jobs.Revert()`. This is
+nomad-gitops could watch the outcome itself and call `Jobs.Revert()`. This is
 the genuinely new, genuinely risky capability.
 
 ## Detecting "a change went badly" — entirely from Nomad
@@ -217,16 +217,16 @@ than today (an unbounded loop) and needs nothing durable.
 
 ### Approach B — tag the failed version (durable, not the default)
 
-Alternatively, when nomad-botherer observes a deployment fail, it tags the
+Alternatively, when nomad-gitops observes a deployment fail, it tags the
 failed version with `Jobs.TagVersion`. Tagged versions survive GC, so the guard
 becomes durable across any time horizon and across restarts, recovered with a
 cheap tag-name lookup instead of (or alongside) a spec comparison.
 
-This is not the default because it is **state nomad-botherer writes into
+This is not the default because it is **state nomad-gitops writes into
 Nomad** — the very thing the no-persistent-state rule pushes against. It is a
 Nomad-native write (not a job-meta write, so it avoids the meta-drift problem),
 and it is recoverable, but it accumulates tags that something must prune, and it
-makes nomad-botherer responsible for state again. It is offered behind
+makes nomad-gitops responsible for state again. It is offered behind
 `--flap-guard=tag` for operators who want hard durability; `history` is the
 default.
 
@@ -277,7 +277,7 @@ a good change would need a SHA-256 collision.
 ## Active rollback for jobs Nomad won't revert (optional)
 
 For service jobs that did not opt into `auto_revert`, and for the operator who
-wants nomad-botherer to centralize the behaviour, an *active* rollback:
+wants nomad-gitops to centralize the behaviour, an *active* rollback:
 
 1. After `Jobs.Register`, do not mark the update `SUCCEEDED` immediately. Move
    it to a new state and **watch the deployment** (`LatestDeployment` poll until
@@ -315,7 +315,7 @@ while Git still wants the failed spec, so the next cycle's drift is held by the
 flap-guard.
 
 **auto_revert always wins.** If a rollback-enabled job's `update` stanza (at the
-job or group level) also sets `auto_revert`, nomad-botherer stands down and lets
+job or group level) also sets `auto_revert`, nomad-gitops stands down and lets
 Nomad revert, logging the clash once per job. Even if that check were bypassed,
 the CAS guard would reject the redundant revert because Nomad's own revert has
 already moved the job off the failed version.
@@ -349,16 +349,16 @@ deployment-producing jobs.
 
 Per the metrics convention, as shipped:
 
-- `nomad_botherer_updates_blocked_known_failed_total{job}` — applies withheld by
+- `nomad_gitops_updates_blocked_known_failed_total{job}` — applies withheld by
   the flap-guard (the signal an operator watches to find a job stuck on a
   known-bad commit awaiting a fix in Git).
-- `nomad_botherer_rollbacks_total{job,result}` — active-rollback outcomes:
+- `nomad_gitops_rollbacks_total{job,result}` — active-rollback outcomes:
   `queued` (a revert was enqueued), `deferred_auto_revert` (stood down for
   Nomad's `auto_revert`), `no_stable_version` (nothing to revert to).
-- `nomad_botherer_failed_versions_tagged_total{job}` — failed versions tagged by
+- `nomad_gitops_failed_versions_tagged_total{job}` — failed versions tagged by
   `--flap-guard=tag`.
 - `REVERT` joins `REGISTER`/`DEREGISTER` in
-  `nomad_botherer_job_updates_total{operation,status}`.
+  `nomad_gitops_job_updates_total{operation,status}`.
 - A new `apply_action` value `blocked_known_failed` on the diff, so `/diffs`,
   the API, and `/healthz` explain the hold (consistent with the existing
   apply-reason exposure).
@@ -383,12 +383,12 @@ deployment watch in the poll-based design.
    non-stable version already represents. Surface it as `blocked_known_failed`.
    This is the cheapest change, introduces no durable state, and removes the
    worst failure mode (the apply→fail→revert→re-apply loop) whether or not the
-   job uses `auto_revert`. It also makes nomad-botherer a *good citizen*
+   job uses `auto_revert`. It also makes nomad-gitops a *good citizen*
    alongside native `auto_revert`: Nomad reverts, we stay out of the way.
 
 2. **Encourage `auto_revert` in managed HCL.** Document that the supported way
    to get automatic rollback is `update { auto_revert = true }` with real health
-   checks; nomad-botherer's job is to detect and not fight it. Optionally add a
+   checks; nomad-gitops's job is to detect and not fight it. Optionally add a
    meta-key validation warning when a `full`-policy job has no `auto_revert`.
 
 3. **Phase 2 (optional, flagged): active rollback.** Only for jobs Nomad will
@@ -418,6 +418,6 @@ deployment watch in the poll-based design.
   unchanged: a newer commit with a different spec is, by construction, not the
   known-failed spec, so it is not blocked.
 - **Active rollback and `auto_revert` together.** *Resolved.* When a
-  rollback-enabled job also sets `auto_revert`, nomad-botherer stands down and
+  rollback-enabled job also sets `auto_revert`, nomad-gitops stands down and
   logs the clash once; the CAS guard on `Jobs.Revert` is a second line of
   defence against a double-revert.

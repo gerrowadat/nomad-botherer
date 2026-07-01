@@ -1,4 +1,4 @@
-# nomad-botherer — Claude instructions
+# nomad-gitops — Claude instructions
 
 ## Rules
 
@@ -22,12 +22,12 @@ Keep cross-links working and the `docs/README.md` index current.
 
 **Do not re-implement incumbents.** Before writing a library or utility from scratch, check whether a well-established Go package exists for it. "Well-established" means high GitHub stars and active maintenance. If something like `go-git`, `prometheus/client_golang`, or `hashicorp/nomad/api` already does the job, use it.
 
-**Add Prometheus metrics for observable behaviour.** Any new operation that can fail, be counted, or be timed should have a corresponding counter or gauge registered in the Prometheus registry. Follow the existing pattern: register via `promauto.With(reg)` in the constructor, keep metric names under the `nomad_botherer_` prefix.
+**Add Prometheus metrics for observable behaviour.** Any new operation that can fail, be counted, or be timed should have a corresponding counter or gauge registered in the Prometheus registry. Follow the existing pattern: register via `promauto.With(reg)` in the constructor, keep metric names under the `nomad_gitops_` prefix.
 
 ## Project layout
 
 ```
-cmd/nomad-botherer/     entry point
+cmd/nomad-gitops/     entry point
 internal/config/        flag + env config
 internal/gitwatch/      in-memory git clone and polling
 internal/nomad/         HCL parsing, Nomad diff logic
@@ -43,9 +43,9 @@ internal/server/        HTTP: /, /healthz, /diffs, /metrics, /webhook
 
 ## Design intent
 
-### What nomad-botherer is
+### What nomad-gitops is
 
-nomad-botherer is a **drift detector and GitOps operator**: it watches a Git
+nomad-gitops is a **drift detector and GitOps operator**: it watches a Git
 repo and a Nomad cluster, reports when they disagree, and — where the per-job
 update policy and deployment flags allow — applies the Git state to Nomad by
 re-registering the job from HCL. The register path (`modified` and
@@ -68,7 +68,7 @@ and `docs/proposals/` holds not-yet-built ideas (automatic rollback,
 checkpointing, Diun integration). Read the relevant doc before extending
 the apply side; the register and deregister paths have shipped.
 `docs/prior-art.md` surveys the existing tooling (nomad-gitops-operator,
-nomad-ops, Levant, Waypoint) and explains the mistakes nomad-botherer
+nomad-ops, Levant, Waypoint) and explains the mistakes nomad-gitops
 deliberately avoids.
 
 ### Core design principles for the apply side (implemented — preserve them)
@@ -81,13 +81,13 @@ the write because the index changed, mark the update failed, trigger a fresh
 diff, and let the next cycle produce a new update with current state.
 
 **Opt-in scope via job meta.** Jobs must declare `meta { "gitops_managed" =
-"true" }` in their HCL to be managed by nomad-botherer. A job without this key
+"true" }` in their HCL to be managed by nomad-gitops. A job without this key
 is never diffed for application purposes, never registered, and never
 deregistered — even if it is running in Nomad without a corresponding HCL file.
 This is the "Operator Pattern in Nomad" (see scalad, Pondidum/nomad-operator).
 Do not change this default without a strong reason; it is what prevents
-nomad-botherer from touching manually-managed jobs on a shared cluster.
-**Git is always the source of truth for nomad-botherer's own behaviour,
+nomad-gitops from touching manually-managed jobs on a shared cluster.
+**Git is always the source of truth for nomad-gitops's own behaviour,
 with no flag override — this is a hard invariant.** When a job has an HCL
 file in the repo, that file alone decides selection and policy: the HCL key
 selects the job even when the live copy lacks it (the missing live key is
@@ -105,17 +105,17 @@ silently removes those keys. Store apply state in Nomad Variables instead
 (see `docs/proposals/change-checkpointing.md`). Do not write tool-generated
 keys into the live job's meta stanza.
 
-**No external database.** nomad-botherer should be schedulable on any node
+**No external database.** nomad-gitops should be schedulable on any node
 without volume claims. The checkpointing proposal recommends Nomad Variables
 (Raft-backed, CAS-protected, requires Nomad 1.4+) as the default, with a
 `CheckpointStore` interface so the backend is swappable. Do not introduce
 SQLite, PostgreSQL, Redis, or any other external store.
 
-**Never write to Git.** nomad-botherer reads Git and reads/writes Nomad —
+**Never write to Git.** nomad-gitops reads Git and reads/writes Nomad —
 nothing else. No commits, no pushes, no GitHub API writes, no state branch;
 the tool holds no Git write credentials. Repo changes (including image tag
 bumps surfaced by external tooling like Diun) arrive by PR from humans or
-from automation that is not this tool. The most nomad-botherer offers is a
+from automation that is not this tool. The most nomad-gitops offers is a
 read-only diff (the image-patch endpoint in the Diun proposal) for someone
 else to turn into a PR.
 

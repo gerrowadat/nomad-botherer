@@ -10,8 +10,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	"github.com/gerrowadat/nomad-botherer/internal/config"
-	"github.com/gerrowadat/nomad-botherer/internal/nomad"
+	"github.com/gerrowadat/nomad-gitops/internal/config"
+	"github.com/gerrowadat/nomad-gitops/internal/nomad"
 )
 
 // metaCheckDiffer builds a Differ whose parsed HCL job carries meta.
@@ -148,10 +148,10 @@ func TestMetaCheck_LoggedOncePerIssue_CountedEveryCycle(t *testing.T) {
 	if got := strings.Count(logs, "unrecognised key under the managed prefix"); got != 1 {
 		t.Errorf("unknown-key warning should be logged exactly once, got %d:\n%s", got, logs)
 	}
-	if got := strings.Count(logs, "recognised nomad-botherer key with an invalid value"); got != 1 {
+	if got := strings.Count(logs, "recognised nomad-gitops key with an invalid value"); got != 1 {
 		t.Errorf("invalid-value error should be logged exactly once, got %d:\n%s", got, logs)
 	}
-	if !strings.Contains(logs, "level=ERROR msg=\"Job meta has a recognised nomad-botherer key") {
+	if !strings.Contains(logs, "level=ERROR msg=\"Job meta has a recognised nomad-gitops key") {
 		t.Errorf("known key with bad value should log at ERROR:\n%s", logs)
 	}
 	if !strings.Contains(logs, "level=WARN msg=\"Job meta has an unrecognised key") {

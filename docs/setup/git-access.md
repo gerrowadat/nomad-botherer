@@ -1,6 +1,6 @@
 # Git access
 
-nomad-botherer clones the repo entirely into memory (it writes nothing to disk)
+nomad-gitops clones the repo entirely into memory (it writes nothing to disk)
 and re-fetches it on every poll interval and on each webhook. For a private
 repo it needs credentials. Three cases:
 
@@ -9,7 +9,7 @@ repo it needs credentials. Three cases:
 No credentials needed:
 
 ```bash
-./nomad-botherer --repo-url https://github.com/myorg/nomad-jobs.git ...
+./nomad-gitops --repo-url https://github.com/myorg/nomad-jobs.git ...
 ```
 
 ## Private repo over HTTPS (token)
@@ -17,7 +17,7 @@ No credentials needed:
 Use a GitHub PAT, GitLab deploy token, or equivalent:
 
 ```bash
-./nomad-botherer \
+./nomad-gitops \
   --repo-url https://github.com/myorg/nomad-jobs.git \
   --git-token ghp_... \
   ...
@@ -28,13 +28,13 @@ refused for a plain `http://` URL, which would send it in cleartext.
 
 Running under Nomad, supply the token from a Nomad Variable rather than
 hardcoding it in the job's `env {}` block. The example job
-([`examples/nomad-botherer.hcl`](../../examples/nomad-botherer.hcl)) shows a
-`template` stanza that reads `GIT_TOKEN` from `nomad/jobs/nomad-botherer`.
+([`examples/nomad-gitops.hcl`](../../examples/nomad-gitops.hcl)) shows a
+`template` stanza that reads `GIT_TOKEN` from `nomad/jobs/nomad-gitops`.
 
 ## Private repo over SSH (key)
 
 ```bash
-./nomad-botherer \
+./nomad-gitops \
   --repo-url git@github.com:myorg/nomad-jobs.git \
   --git-ssh-key ~/.ssh/id_ed25519 \
   ...

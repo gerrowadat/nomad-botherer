@@ -9,7 +9,7 @@ import (
 	nomadapi "github.com/hashicorp/nomad/api"
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/gerrowadat/nomad-botherer/internal/nomad"
+	"github.com/gerrowadat/nomad-gitops/internal/nomad"
 )
 
 // TestMetrics_AllExpectedMetricsPresent verifies that a fresh Differ registers
@@ -29,19 +29,19 @@ func TestMetrics_AllExpectedMetricsPresent(t *testing.T) {
 	}
 
 	required := []string{
-		"nomad_botherer_diff_checks_total",
-		"nomad_botherer_diff_checks_skipped_total",
-		"nomad_botherer_hcl_parse_errors_total",
-		"nomad_botherer_hcl_non_job_files_skipped_total",
-		"nomad_botherer_nomad_api_errors_total",
-		"nomad_botherer_last_check_timestamp_seconds",
-		// nomad_botherer_job_diffs and nomad_botherer_job_drift_first_seen_timestamp_seconds
+		"nomad_gitops_diff_checks_total",
+		"nomad_gitops_diff_checks_skipped_total",
+		"nomad_gitops_hcl_parse_errors_total",
+		"nomad_gitops_hcl_non_job_files_skipped_total",
+		"nomad_gitops_nomad_api_errors_total",
+		"nomad_gitops_last_check_timestamp_seconds",
+		// nomad_gitops_job_diffs and nomad_gitops_job_drift_first_seen_timestamp_seconds
 		// have a dynamic "job" label and only appear after a Check call produces drift.
 		// They are exercised by TestMetrics_DiffCountersReflectState and
 		// TestMetrics_FirstSeenTimestamps.
-		"nomad_botherer_drifted_jobs",
-		"nomad_botherer_nomad_staleness_checks_total",
-		"nomad_botherer_jobs_skipped_by_selector_total",
+		"nomad_gitops_drifted_jobs",
+		"nomad_gitops_nomad_staleness_checks_total",
+		"nomad_gitops_jobs_skipped_by_selector_total",
 	}
 	for _, name := range required {
 		if _, ok := present[name]; !ok {
@@ -87,21 +87,21 @@ func TestMetrics_DiffCountersReflectState(t *testing.T) {
 	}
 
 	// The drifted_jobs gauge should reflect the two diffs.
-	drifted := gatherCounter(t, reg, "nomad_botherer_drifted_jobs")
+	drifted := gatherCounter(t, reg, "nomad_gitops_drifted_jobs")
 	if drifted == 0 {
-		t.Error("nomad_botherer_drifted_jobs should be nonzero after diffs detected")
+		t.Error("nomad_gitops_drifted_jobs should be nonzero after diffs detected")
 	}
 
 	// The job_diffs gauge should have one entry per (job, diff_type) pair.
-	jobDiff := gatherCounter(t, reg, "nomad_botherer_job_diffs")
+	jobDiff := gatherCounter(t, reg, "nomad_gitops_job_diffs")
 	if jobDiff == 0 {
-		t.Error("nomad_botherer_job_diffs should be nonzero")
+		t.Error("nomad_gitops_job_diffs should be nonzero")
 	}
 
 	// last_check_timestamp should be a plausible recent Unix timestamp.
-	lastCheck := gatherCounter(t, reg, "nomad_botherer_last_check_timestamp_seconds")
+	lastCheck := gatherCounter(t, reg, "nomad_gitops_last_check_timestamp_seconds")
 	if lastCheck < 1_000_000_000 { // anything before 2001 is wrong
-		t.Errorf("nomad_botherer_last_check_timestamp_seconds not set (got %v)", lastCheck)
+		t.Errorf("nomad_gitops_last_check_timestamp_seconds not set (got %v)", lastCheck)
 	}
 }
 
@@ -130,7 +130,7 @@ func TestMetrics_APIErrorCounter(t *testing.T) {
 	// The List() call fails; the differ logs the error and continues.
 	// diff_checks_total still increments (we started a check, even if List failed).
 	// API errors may or may not be counted depending on how the SDK reports the failure.
-	checks := gatherCounter(t, reg, "nomad_botherer_diff_checks_total")
+	checks := gatherCounter(t, reg, "nomad_gitops_diff_checks_total")
 	if checks == 0 {
 		t.Error("diff_checks_total should be ≥1 even when the API is unreachable")
 	}
@@ -162,8 +162,8 @@ func TestMetrics_SkipOptimizationCounter(t *testing.T) {
 		}
 	}
 
-	checks := gatherCounter(t, reg, "nomad_botherer_diff_checks_total")
-	skipped := gatherCounter(t, reg, "nomad_botherer_diff_checks_skipped_total")
+	checks := gatherCounter(t, reg, "nomad_gitops_diff_checks_total")
+	skipped := gatherCounter(t, reg, "nomad_gitops_diff_checks_skipped_total")
 
 	if checks < 1 {
 		t.Errorf("want ≥1 real check, got %v", checks)
@@ -190,7 +190,7 @@ func TestMetrics_FirstSeenTimestamps(t *testing.T) {
 	if err := d.Check(map[string]string{jobID + ".hcl": hcl}, "c1"); err != nil {
 		t.Fatalf("Check c1: %v", err)
 	}
-	ts1 := gatherCounter(t, reg, "nomad_botherer_job_drift_first_seen_timestamp_seconds")
+	ts1 := gatherCounter(t, reg, "nomad_gitops_job_drift_first_seen_timestamp_seconds")
 	if ts1 == 0 {
 		t.Fatal("first-seen timestamp should be set after initial drift detection")
 	}
@@ -202,7 +202,7 @@ func TestMetrics_FirstSeenTimestamps(t *testing.T) {
 	if err := d.Check(map[string]string{jobID + ".hcl": hcl}, "c2"); err != nil {
 		t.Fatalf("Check c2: %v", err)
 	}
-	ts2 := gatherCounter(t, reg, "nomad_botherer_job_drift_first_seen_timestamp_seconds")
+	ts2 := gatherCounter(t, reg, "nomad_gitops_job_drift_first_seen_timestamp_seconds")
 	if ts2 != ts1 {
 		t.Errorf("first-seen should be stable across checks: c1=%v c2=%v", ts1, ts2)
 	}
@@ -214,7 +214,7 @@ func TestMetrics_FirstSeenTimestamps(t *testing.T) {
 	if err := d.Check(map[string]string{jobID + ".hcl": hcl}, "c3"); err != nil {
 		t.Fatalf("Check c3: %v", err)
 	}
-	ts3 := gatherCounter(t, reg, "nomad_botherer_job_drift_first_seen_timestamp_seconds")
+	ts3 := gatherCounter(t, reg, "nomad_gitops_job_drift_first_seen_timestamp_seconds")
 	if ts3 != 0 {
 		t.Errorf("first-seen timestamp should be cleared after drift resolves, got %v", ts3)
 	}
@@ -235,7 +235,7 @@ func TestMetrics_HCLParseErrorCounter(t *testing.T) {
 		t.Fatalf("Check returned unexpected error: %v", err)
 	}
 
-	parseErrors := gatherCounter(t, reg, "nomad_botherer_hcl_parse_errors_total")
+	parseErrors := gatherCounter(t, reg, "nomad_gitops_hcl_parse_errors_total")
 	if parseErrors < 1 {
 		t.Errorf("want ≥1 HCL parse error counted, got %v", parseErrors)
 	}
@@ -260,7 +260,7 @@ namespace "default" {
 		t.Fatalf("Check returned error: %v", err)
 	}
 
-	skipped := gatherCounter(t, reg, "nomad_botherer_hcl_non_job_files_skipped_total")
+	skipped := gatherCounter(t, reg, "nomad_gitops_hcl_non_job_files_skipped_total")
 	if skipped < 1 {
 		t.Errorf("want ≥1 non-job file skipped, got %v", skipped)
 	}

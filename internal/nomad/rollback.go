@@ -11,7 +11,7 @@ import (
 )
 
 // Rollback and the flap-loop guard. Both lean on Nomad's own state — version
-// history and deployment outcomes — so nomad-botherer holds no durable record
+// history and deployment outcomes — so nomad-gitops holds no durable record
 // of "what failed". See docs/design/automatic-rollback.md.
 //
 // Scope: only deployment-producing jobs (service jobs with an update stanza and
@@ -28,7 +28,7 @@ var volatileJobFields = []string{
 }
 
 // specFingerprint returns a stable hash of a job's spec, ignoring exactly what
-// the diff classifier ignores (nomad-botherer's own managed-prefix meta keys
+// the diff classifier ignores (nomad-gitops's own managed-prefix meta keys
 // and autoscaler-owned Count/Scaling) plus Nomad-injected version bookkeeping.
 // Comparing an HCL-parsed job against a stored Nomad version is best-effort:
 // server-side defaulting can make a legitimately-identical spec differ, in
@@ -79,7 +79,7 @@ func specFingerprint(job *nomadapi.Job, metaPrefix string) (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
-// stripPrefixedKeys removes nomad-botherer's own managed meta keys (both the
+// stripPrefixedKeys removes nomad-gitops's own managed meta keys (both the
 // underscore and dotted forms) from a meta map.
 func stripPrefixedKeys(meta map[string]interface{}, prefix string) {
 	if prefix == "" {
@@ -118,7 +118,7 @@ func (d *Differ) effectiveRollback(meta map[string]string) bool {
 
 // jobHasAutoRevert reports whether a job's update stanza opts into Nomad's
 // native auto_revert, at the job level or on any task group. When true,
-// nomad-botherer stands down: Nomad's own rollback always wins.
+// nomad-gitops stands down: Nomad's own rollback always wins.
 func jobHasAutoRevert(job *nomadapi.Job) bool {
 	if job == nil {
 		return false
@@ -250,7 +250,7 @@ func (d *Differ) tagFailedVersion(jobID string, version uint64, v *nomadapi.Job,
 	}
 	wq := &nomadapi.WriteOptions{Namespace: d.namespace}
 	if _, err := d.jobs.TagVersion(jobID, version, d.failedTagName(fingerprint),
-		"nomad-botherer: deployment failed; held by the flap-loop guard", wq); err != nil {
+		"nomad-gitops: deployment failed; held by the flap-loop guard", wq); err != nil {
 		d.nomadAPIErrors.WithLabelValues("tag").Inc()
 		slog.Warn("Flap-guard: could not tag failed version", "job", jobID, "version", version, "err", err)
 		return
@@ -282,7 +282,7 @@ func lastStableVersion(versions []*nomadapi.Job, failed uint64) (uint64, bool) {
 // checkRollbacks runs the active-rollback poll over the managed jobs. For each
 // job that has rollback enabled and whose latest deployment has failed, it
 // enqueues a REVERT to the last stable version — unless the job's update stanza
-// sets auto_revert, in which case Nomad's own rollback wins and nomad-botherer
+// sets auto_revert, in which case Nomad's own rollback wins and nomad-gitops
 // stands down (logged once). Jobs without a deployment are skipped naturally.
 // metaByJob carries each managed job's meta (HCL where present, else live).
 func (d *Differ) checkRollbacks(metaByJob map[string]map[string]string, q *nomadapi.QueryOptions, raftIndex uint64) {
@@ -310,7 +310,7 @@ func (d *Differ) checkRollbacks(metaByJob map[string]map[string]string, q *nomad
 		}
 		if jobHasAutoRevert(liveJob) {
 			// auto_revert always wins. Log the clash once per job so an operator
-			// who set both knows nomad-botherer is deliberately standing down.
+			// who set both knows nomad-gitops is deliberately standing down.
 			if _, seen := d.rollbackLogged.LoadOrStore(jobID, struct{}{}); !seen {
 				slog.Warn("Rollback: job has a failed deployment but its update stanza sets auto_revert; standing down and letting Nomad revert",
 					"job", jobID)

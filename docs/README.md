@@ -1,6 +1,6 @@
-# nomad-botherer documentation
+# nomad-gitops documentation
 
-Start at the [project README](../README.md) for what nomad-botherer is and a
+Start at the [project README](../README.md) for what nomad-gitops is and a
 60-second quick start. This directory is the full documentation set.
 
 ## Setup
@@ -9,7 +9,7 @@ How to run it and connect it to your repo and cluster — pick the path that fit
 your deployment.
 
 - [Installation](setup/installation.md) — get the binary or container image.
-- [Running nomad-botherer](setup/running.md) — as a Nomad job, a standalone
+- [Running nomad-gitops](setup/running.md) — as a Nomad job, a standalone
   binary, or a Docker container; and opting jobs in.
 - [Git access](setup/git-access.md) — public, HTTPS token, or SSH key.
 - [Nomad access](setup/nomad-access.md) — workload identity (recommended) or a
@@ -47,5 +47,5 @@ your deployment.
 
 ## License
 
-nomad-botherer is licensed under the Apache License, Version 2.0. See
+nomad-gitops is licensed under the Apache License, Version 2.0. See
 [`LICENSE`](../LICENSE).

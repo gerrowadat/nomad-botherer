@@ -8,7 +8,7 @@ import (
 )
 
 // Meta-key change tracking: the gitops_* keys are behavioural switches, so a
-// job gaining, losing, or editing one changes what nomad-botherer does with
+// job gaining, losing, or editing one changes what nomad-gitops does with
 // it. Every transition is logged with the consequence — what the tool will
 // do differently to honour it. Both sources are watched: the HCL side (a
 // commit changed the keys) and the live side (someone re-registered the job
@@ -20,7 +20,7 @@ import (
 // metaState holds a job's prefix-addressed meta keys from one source.
 type metaState map[string]string
 
-// prefixMetaKeys extracts the keys addressed to nomad-botherer (underscore
+// prefixMetaKeys extracts the keys addressed to nomad-gitops (underscore
 // and dotted forms) from meta.
 func (d *Differ) prefixMetaKeys(meta map[string]string) metaState {
 	out := metaState{}
@@ -106,7 +106,7 @@ func (d *Differ) diffMetaState(source, jobID string, prev, cur metaState) {
 	}
 }
 
-// metaChangeAction describes what nomad-botherer will do to honour a key
+// metaChangeAction describes what nomad-gitops will do to honour a key
 // transition.
 func (d *Differ) metaChangeAction(jobID, source, key, oldV, newV string, hasNew bool) string {
 	switch key {
@@ -119,7 +119,7 @@ func (d *Differ) metaChangeAction(jobID, source, key, oldV, newV string, hasNew 
 	case d.managedMetaPrefix + "_rollback":
 		return d.rollbackTransitionAction(source, newV, hasNew)
 	default:
-		return "key is not one nomad-botherer understands; no behaviour change (see meta-key issue warnings)"
+		return "key is not one nomad-gitops understands; no behaviour change (see meta-key issue warnings)"
 	}
 }
 
@@ -138,7 +138,7 @@ func (d *Differ) managedTransitionAction(jobID, source, newV string, hasNew bool
 		return base + "; the live job does not need to carry the key — that managed-meta-only difference is not applied or counted as drift on its own, and converges on the next real update"
 	}
 	// Removed, "false", or an invalid value: the opt-in check no longer passes.
-	suffix := "nomad-botherer stops diffing it and will never register or deregister it"
+	suffix := "nomad-gitops stops diffing it and will never register or deregister it"
 	if hasNew && !validManagedValue(newV) {
 		suffix = "the value is invalid, so the opt-in check fails; " + suffix
 	}
@@ -228,7 +228,7 @@ func (d *Differ) rollbackTransitionAction(source, newV string, hasNew bool) stri
 	if enabled {
 		behaviour = "active rollback is enabled: a failed deployment on this job reverts to the last stable version (unless the update stanza sets auto_revert, in which case Nomad's own rollback wins)"
 	} else {
-		behaviour = "active rollback is disabled: a failed deployment is surfaced but not reverted by nomad-botherer (Nomad's auto_revert, if set, still applies)"
+		behaviour = "active rollback is disabled: a failed deployment is surfaced but not reverted by nomad-gitops (Nomad's auto_revert, if set, still applies)"
 	}
 
 	note := ""

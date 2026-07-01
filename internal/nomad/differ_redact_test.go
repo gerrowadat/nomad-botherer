@@ -7,8 +7,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	"github.com/gerrowadat/nomad-botherer/internal/config"
-	"github.com/gerrowadat/nomad-botherer/internal/nomad"
+	"github.com/gerrowadat/nomad-gitops/internal/config"
+	"github.com/gerrowadat/nomad-gitops/internal/nomad"
 )
 
 // envDiffMock returns a client whose plan reports an edited env var and an
@@ -63,7 +63,7 @@ func TestDiffer_RedactSecrets_StoredDiffIsRedacted(t *testing.T) {
 
 	got := testutil.ToFloat64(nomad.RedactedFieldsCounter(d))
 	if got != 1 {
-		t.Errorf("nomad_botherer_diff_fields_redacted_total: want 1, got %v", got)
+		t.Errorf("nomad_gitops_diff_fields_redacted_total: want 1, got %v", got)
 	}
 }
 

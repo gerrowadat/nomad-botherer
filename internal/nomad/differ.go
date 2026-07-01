@@ -17,7 +17,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 
-	"github.com/gerrowadat/nomad-botherer/internal/config"
+	"github.com/gerrowadat/nomad-gitops/internal/config"
 )
 
 // jobBlockRe matches a top-level Nomad job stanza in HCL.
@@ -67,7 +67,7 @@ type JobDiff struct {
 	DiffType DiffType `json:"diff_type"`
 	Detail   string   `json:"detail"`
 
-	// ApplyAction records what nomad-botherer will do about this diff and,
+	// ApplyAction records what nomad-gitops will do about this diff and,
 	// when it will not apply it, why. Lets the API and web console explain
 	// non-application without log scraping.
 	ApplyAction ApplyAction `json:"apply_action,omitempty"`
@@ -364,107 +364,107 @@ func newDifferBase(jobs NomadJobsClient, cfg *config.Config, reg prometheus.Regi
 		applyCh:              make(chan struct{}, 1),
 		driftFirstSeen:       make(map[string]time.Time),
 		hclParseErrors: f.NewCounter(prometheus.CounterOpts{
-			Name: "nomad_botherer_hcl_parse_errors_total",
+			Name: "nomad_gitops_hcl_parse_errors_total",
 			Help: "Total number of HCL files that failed to parse as Nomad job definitions.",
 		}),
 		hclFilesSkipped: f.NewCounter(prometheus.CounterOpts{
-			Name: "nomad_botherer_hcl_non_job_files_skipped_total",
+			Name: "nomad_gitops_hcl_non_job_files_skipped_total",
 			Help: "Total number of HCL files skipped because they lack a top-level job stanza (e.g. ACL policies, volumes).",
 		}),
 		diffChecks: f.NewCounter(prometheus.CounterOpts{
-			Name: "nomad_botherer_diff_checks_total",
+			Name: "nomad_gitops_diff_checks_total",
 			Help: "Total number of diff checks run against the Nomad cluster.",
 		}),
 		diffChecksSkipped: f.NewCounter(prometheus.CounterOpts{
-			Name: "nomad_botherer_diff_checks_skipped_total",
+			Name: "nomad_gitops_diff_checks_skipped_total",
 			Help: "Total number of diff checks skipped because neither the Nomad index nor the git commit changed.",
 		}),
 		staleChecks: f.NewCounter(prometheus.CounterOpts{
-			Name: "nomad_botherer_nomad_staleness_checks_total",
+			Name: "nomad_gitops_nomad_staleness_checks_total",
 			Help: "Total number of Nomad diff checks triggered by the staleness check.",
 		}),
 		redactedFields: f.NewCounter(prometheus.CounterOpts{
-			Name: "nomad_botherer_diff_fields_redacted_total",
+			Name: "nomad_gitops_diff_fields_redacted_total",
 			Help: "Total number of potentially sensitive plan-diff field values redacted before storage.",
 		}),
 		jobsSkippedBySel: f.NewCounterVec(prometheus.CounterOpts{
-			Name: "nomad_botherer_jobs_skipped_by_selector_total",
+			Name: "nomad_gitops_jobs_skipped_by_selector_total",
 			Help: "Total number of jobs skipped because they did not match the configured selection criteria, by source (hcl or nomad).",
 		}, []string{"source"}),
 		nomadAPIErrors: f.NewCounterVec(prometheus.CounterOpts{
-			Name: "nomad_botherer_nomad_api_errors_total",
+			Name: "nomad_gitops_nomad_api_errors_total",
 			Help: "Total number of Nomad API errors by operation.",
 		}, []string{"op"}),
 		lastCheck: f.NewGauge(prometheus.GaugeOpts{
-			Name: "nomad_botherer_last_check_timestamp_seconds",
+			Name: "nomad_gitops_last_check_timestamp_seconds",
 			Help: "Unix timestamp of the most recent diff check.",
 		}),
 		jobDiffs: f.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "nomad_botherer_job_diffs",
+			Name: "nomad_gitops_job_diffs",
 			Help: "1 for each job/diff-type combination currently detected.",
 		}, []string{"job", "diff_type"}),
 		driftedJobs: f.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "nomad_botherer_drifted_jobs",
+			Name: "nomad_gitops_drifted_jobs",
 			Help: "Number of jobs currently in each drift state.",
 		}, []string{"diff_type"}),
 		jobDriftSince: f.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "nomad_botherer_job_drift_first_seen_timestamp_seconds",
+			Name: "nomad_gitops_job_drift_first_seen_timestamp_seconds",
 			Help: "Unix timestamp when drift was first detected for each job. Cleared when drift resolves. Use time()-metric to get seconds in drift state.",
 		}, []string{"job", "diff_type"}),
 		updatesBlockedByPolicy: f.NewCounterVec(prometheus.CounterOpts{
-			Name: "nomad_botherer_updates_blocked_by_policy_total",
+			Name: "nomad_gitops_updates_blocked_by_policy_total",
 			Help: "Detected diffs that would have produced a JobUpdate but were filtered out by the effective update policy.",
 		}, []string{"job", "policy"}),
 		updatesBlockedCreationDisabled: f.NewCounterVec(prometheus.CounterOpts{
-			Name: "nomad_botherer_updates_blocked_creation_disabled_total",
+			Name: "nomad_gitops_updates_blocked_creation_disabled_total",
 			Help: "First-time registrations blocked because --enable-job-creation is off.",
 		}, []string{"job"}),
 		jobUpdatesTotal: f.NewCounterVec(prometheus.CounterOpts{
-			Name: "nomad_botherer_job_updates_total",
+			Name: "nomad_gitops_job_updates_total",
 			Help: "JobUpdates reaching a terminal state, by operation and status.",
 		}, []string{"operation", "status"}),
 		pendingUpdates: f.NewGauge(prometheus.GaugeOpts{
-			Name: "nomad_botherer_job_updates_pending",
+			Name: "nomad_gitops_job_updates_pending",
 			Help: "Number of JobUpdates currently waiting to be applied.",
 		}),
 		metaKeyIssues: f.NewCounterVec(prometheus.CounterOpts{
-			Name: "nomad_botherer_meta_key_issues_total",
-			Help: "Job meta keys under the managed prefix that nomad-botherer cannot act on, by issue (unknown_key, invalid_value). Counted every check cycle the issue persists.",
+			Name: "nomad_gitops_meta_key_issues_total",
+			Help: "Job meta keys under the managed prefix that nomad-gitops cannot act on, by issue (unknown_key, invalid_value). Counted every check cycle the issue persists.",
 		}, []string{"job", "issue"}),
 		metaKeyChanges: f.NewCounterVec(prometheus.CounterOpts{
-			Name: "nomad_botherer_meta_key_changes_total",
+			Name: "nomad_gitops_meta_key_changes_total",
 			Help: "Transitions of managed-prefix meta keys (added, removed, changed) noticed between check cycles, by source (hcl or nomad).",
 		}, []string{"job", "source"}),
 		metaOnlyDiffs: f.NewCounterVec(prometheus.CounterOpts{
-			Name: "nomad_botherer_meta_only_diffs_total",
-			Help: "Diffs confined to nomad-botherer's own meta keys, detected per check cycle. By default these are neither counted as drift nor applied (see --count-meta-only-changes, --apply-meta-only-changes); they converge on the next real update.",
+			Name: "nomad_gitops_meta_only_diffs_total",
+			Help: "Diffs confined to nomad-gitops's own meta keys, detected per check cycle. By default these are neither counted as drift nor applied (see --count-meta-only-changes, --apply-meta-only-changes); they converge on the next real update.",
 		}, []string{"job"}),
 		updatesBlockedExistingDrift: f.NewCounterVec(prometheus.CounterOpts{
-			Name: "nomad_botherer_updates_blocked_preexisting_total",
+			Name: "nomad_gitops_updates_blocked_preexisting_total",
 			Help: "Updates not enqueued because the drift pre-dated a scope change that brought it in: the job's opt-in (managed tag added) or a policy widening (e.g. image-only to full). Enable with --apply-existing-drift.",
 		}, []string{"job"}),
 		jobsLeftManagement: f.NewCounterVec(prometheus.CounterOpts{
-			Name: "nomad_botherer_jobs_left_management_total",
+			Name: "nomad_gitops_jobs_left_management_total",
 			Help: "Managed jobs that left GitOps management, by reason: tag_removed (gitops_managed dropped from HCL) or removed_from_repo (HCL file deleted or job renamed). Logged once per transition.",
 		}, []string{"job", "reason"}),
 		updatesBlockedKnownFailed: f.NewCounterVec(prometheus.CounterOpts{
-			Name: "nomad_botherer_updates_blocked_known_failed_total",
+			Name: "nomad_gitops_updates_blocked_known_failed_total",
 			Help: "Registrations withheld by the flap-loop guard because the HCL spec matches a recent Nomad job version whose deployment failed. The signal that a job is stuck on a known-bad commit awaiting a fix in Git.",
 		}, []string{"job"}),
 		rollbacks: f.NewCounterVec(prometheus.CounterOpts{
-			Name: "nomad_botherer_rollbacks_total",
+			Name: "nomad_gitops_rollbacks_total",
 			Help: "Active rollback outcomes for deployment-producing jobs without auto_revert, by result: queued (a revert was enqueued), deferred_auto_revert (stood down because the job's update stanza sets auto_revert), no_stable_version (no stable version to revert to).",
 		}, []string{"job", "result"}),
 		failedVersionsTagged: f.NewCounterVec(prometheus.CounterOpts{
-			Name: "nomad_botherer_failed_versions_tagged_total",
+			Name: "nomad_gitops_failed_versions_tagged_total",
 			Help: "Failed job versions tagged in Nomad by the flap-guard tag mode (--flap-guard=tag) so the block survives version GC.",
 		}, []string{"job"}),
 		nomadTokenRefreshes: f.NewCounterVec(prometheus.CounterOpts{
-			Name: "nomad_botherer_nomad_token_refreshes_total",
+			Name: "nomad_gitops_nomad_token_refreshes_total",
 			Help: "Re-reads of the Nomad token file (--nomad-token-file), by result: rotated (the token changed and was applied), error (the file could not be read; previous token kept).",
 		}, []string{"result"}),
 		nomadLogins: f.NewCounterVec(prometheus.CounterOpts{
-			Name: "nomad_botherer_nomad_logins_total",
+			Name: "nomad_gitops_nomad_logins_total",
 			Help: "Workload-identity token exchanges via /v1/acl/login (--nomad-login-auth-method), by result: success (a fresh ACL token was obtained and applied) or error (the exchange failed; previous token kept).",
 		}, []string{"result"}),
 	}
@@ -809,7 +809,7 @@ func (d *Differ) checkHCLCandidate(jobID string, entry hclEntry, q *nomadapi.Que
 	nomadJob, _, infoErr := d.jobs.Info(jobID, q)
 	notFound := infoErr != nil && isNotFound(infoErr)
 
-	// Git is always the source of truth for nomad-botherer's own behaviour:
+	// Git is always the source of truth for nomad-gitops's own behaviour:
 	// when a job has an HCL file, its keys alone decide selection. The opt-in
 	// key in HCL selects the job even when the live copy does not carry it
 	// yet — the key's absence on the live job is itself drift, and applying
@@ -1013,7 +1013,7 @@ func (d *Differ) Check(hclFiles map[string]string, commit string) error {
 	// metaByJob holds the HCL meta of each managed job that has an HCL file in
 	// the repo, used by the rollback poll. Active rollback is deliberately
 	// scoped to HCL-defined jobs: a job running in Nomad with no HCL is either
-	// unmanaged or an orphan leaving management, not something nomad-botherer
+	// unmanaged or an orphan leaving management, not something nomad-gitops
 	// drives applies for, so it is not a rollback candidate.
 	metaByJob := make(map[string]map[string]string)
 	var diffs []JobDiff

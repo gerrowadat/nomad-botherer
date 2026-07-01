@@ -1,7 +1,7 @@
 # Webhooks
 
 Configuring a webhook removes the latency between a push to the repo and the
-next drift check — instead of waiting for `--poll-interval`, nomad-botherer
+next drift check — instead of waiting for `--poll-interval`, nomad-gitops
 fetches immediately on push. Webhooks are optional; polling always runs too.
 
 ## GitHub setup

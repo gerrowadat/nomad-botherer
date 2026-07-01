@@ -1,6 +1,6 @@
 # Development
 
-How to build, test, and release nomad-botherer. For using it, start at the
+How to build, test, and release nomad-gitops. For using it, start at the
 [documentation index](README.md).
 
 ## Local development with .env
@@ -13,7 +13,7 @@ setting environment variables by hand each time.
 cp .env.example .env
 $EDITOR .env
 make build
-./nomad-botherer
+./nomad-gitops
 ```
 
 `.env` is listed in `.gitignore` and will never be committed.
@@ -21,7 +21,7 @@ make build
 ## Build and test
 
 ```bash
-make build        # compile nomad-botherer
+make build        # compile nomad-gitops
 make install      # go install to $GOPATH/bin
 make test         # go test -race ./...
 make test-cover   # run tests and generate coverage.html
@@ -47,7 +47,7 @@ scripts/send-webhook.sh
 scripts/send-webhook.sh -b develop -c abc1234def5678
 
 # Target a different host or port
-scripts/send-webhook.sh -u http://nomad-botherer.internal/webhook
+scripts/send-webhook.sh -u http://nomad-gitops.internal/webhook
 
 # See all options
 scripts/send-webhook.sh -h
@@ -155,7 +155,7 @@ calls. They are reliable against the isolated Docker-managed cluster.
 ### Nomad version compatibility
 
 [`nomad-versions.md`](nomad-versions.md) documents which Nomad versions have been
-verified against each nomad-botherer release by running the full regression
+verified against each nomad-gitops release by running the full regression
 suite. The table is updated manually when a release is cut.
 `tests/regression/compat.go` holds a `TestedVersions` slice that mirrors the
 table in code.
@@ -178,7 +178,7 @@ git push origin <tag>   # e.g. git push origin v1.2.4
 
 Then go to GitHub, find the tag under **Releases**, and **publish** it.
 Publishing triggers the Docker workflow, which builds and pushes
-`ghcr.io/gerrowadat/nomad-botherer:<tag>` for both `amd64` and `arm64`.
+`ghcr.io/gerrowadat/nomad-gitops:<tag>` for both `amd64` and `arm64`.
 
 ### Docker builds
 

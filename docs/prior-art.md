@@ -2,10 +2,10 @@
 
 This document surveys the existing tooling for GitOps-style job management in
 Nomad, identifies what each tool does well and where each falls short, and
-explains what problems nomad-botherer is trying to solve differently.
+explains what problems nomad-gitops is trying to solve differently.
 
 Job *application* (actually submitting changes to Nomad from Git) is not yet
-implemented in nomad-botherer. The design proposals that inform that work are in
+implemented in nomad-gitops. The design proposals that inform that work are in
 [`docs/proposals/`](proposals/).
 
 ---
@@ -115,8 +115,8 @@ deliberately *only notifies*: it never writes to a cluster or a repo, has no
 query API (push-only, each event delivered once), and keeps its own seen-state
 in an embedded store. This makes it composable with a GitOps operator rather
 than competing with one. The planned setup points Diun's Nomad provider at
-the cluster, watching all jobs; nomad-botherer and Diun do not talk to each
-other at all. nomad-botherer's only contribution is a read-only patch
+the cluster, watching all jobs; nomad-gitops and Diun do not talk to each
+other at all. nomad-gitops's only contribution is a read-only patch
 endpoint for whoever acts on the notifications — consuming them and writing
 the bump to Git stays outside the tool.
 
@@ -126,8 +126,8 @@ Opens PRs against the repo when dependencies — including Docker image
 references — have newer versions. Writes to *Git*, which keeps the GitOps
 invariant intact. The catch for this project: Nomad HCL is not a natively
 supported manager, so image references in job files need custom regex
-managers. Renovate can coexist with nomad-botherer (Renovate bumps Git,
-nomad-botherer applies), and the planned patch-helper endpoint deliberately
+managers. Renovate can coexist with nomad-gitops (Renovate bumps Git,
+nomad-gitops applies), and the planned patch-helper endpoint deliberately
 leaves room for it or similar tooling to own the PR side.
 
 ### argocd-image-updater (Argo project)
@@ -145,15 +145,15 @@ that "surface the update, let Git change first" is the defensible default.
 A Kubernetes operator that updates workloads *in-cluster* when new images
 appear, with optional approval workflows. The cluster drifts ahead of Git
 by design; Git stops being the source of truth. This is precisely the
-failure mode nomad-botherer avoids by never applying anything that is not
-in Git: Diun notices the update, nomad-botherer offers a ready-made diff,
+failure mode nomad-gitops avoids by never applying anything that is not
+in Git: Diun notices the update, nomad-gitops offers a ready-made diff,
 but the change must land in the repo before it lands in Nomad.
 
 ---
 
-## What nomad-botherer does differently today
+## What nomad-gitops does differently today
 
-nomad-botherer detects drift always and applies it only where per-job update
+nomad-gitops detects drift always and applies it only where per-job update
 policies and deployment flags allow (the default is detection-only). Both
 sides address the problems above:
 
@@ -191,7 +191,7 @@ main poll interval.
 
 ---
 
-## What nomad-botherer wants to do differently for job application
+## What nomad-gitops wants to do differently for job application
 
 The proposals in [`docs/proposals/`](proposals/) describe the intended approach
 to applying changes. The main design decisions, and how they differ from the
@@ -217,7 +217,7 @@ prevents accidental deregistration of manually-managed jobs.
 storage. The design proposals use Nomad Variables (Raft-backed KV built into
 Nomad 1.4+) for checkpoint state instead, paired with a meta opt-in scope
 selector; a dedicated Git state branch was considered and rejected, because
-nomad-botherer never writes to Git. The goal is that nomad-botherer can be
+nomad-gitops never writes to Git. The goal is that nomad-gitops can be
 rescheduled to any node without volume claims.
 
 **Async apply queue, not synchronous blocking.** An in-process queue decouples
@@ -225,7 +225,7 @@ detection from application. A slow or failing apply does not delay the next diff
 check. Updates for the same job that arrive faster than applies finish are
 marked superseded; the most recent intended state always wins.
 
-**Conservative deletion.** The `missing_from_hcl` drift type in nomad-botherer
+**Conservative deletion.** The `missing_from_hcl` drift type in nomad-gitops
 is an observation, not an automatic action. Any future deregister behaviour
 should require the opt-in key to be present on the live job (confirming the job
 was previously managed by this operator), and should probably require an explicit
@@ -236,12 +236,12 @@ flag, not be on-by-default.
 ## What no existing tool solves
 
 Several problems remain open across all Nomad GitOps tooling, including
-nomad-botherer's planned work:
+nomad-gitops's planned work:
 
 - **No multi-cluster support** in any OSS tool. Cluster fan-out requires a
   separate instance per cluster.
 - **No workload identity.** All tools require a static Nomad token. Nomad's
-  JWT-based workload identity (available when nomad-botherer itself runs as a
+  JWT-based workload identity (available when nomad-gitops itself runs as a
   Nomad job) is not used by any of the tools surveyed.
 - **No dependency ordering.** If job B depends on job A being registered first,
   there is no mechanism to express or enforce this. Nomad does not expose a
